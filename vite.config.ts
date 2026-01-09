@@ -18,6 +18,10 @@ if (
 const host = new URL(process.env.SHOPIFY_APP_URL || "http://localhost")
   .hostname;
 
+// Allow all hosts in development (needed for dynamic ngrok URLs)
+// In production, only allow the configured host
+const allowedHosts = process.env.NODE_ENV === "production" ? [host] : true;
+
 let hmrConfig;
 if (host === "localhost") {
   hmrConfig = {
@@ -37,7 +41,8 @@ if (host === "localhost") {
 
 export default defineConfig({
   server: {
-    allowedHosts: [host],
+    host: "0.0.0.0",
+    allowedHosts: allowedHosts,
     cors: {
       preflightContinue: true,
     },
