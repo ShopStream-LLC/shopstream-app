@@ -32,3 +32,70 @@ model Session {
   refreshToken        String?
   refreshTokenExpires DateTime?
 }
+
+enum StreamStatus {
+  DRAFT
+  SCHEDULED
+  LIVE
+  ENDED
+}
+
+enum StreamEventType {
+  STREAM_STARTED
+  STREAM_ENDED
+  PRODUCT_FEATURED
+  PRODUCT_UNFEATURED
+  DEAL_CREATED
+  DEAL_ENDED
+}
+
+model Stream {
+  id            String   @id @default(uuid())
+  shop          String   // shop domain
+  title         String
+  description   String?
+  status        StreamStatus @default(DRAFT)
+
+  // Scheduling
+  scheduledAt   DateTime?
+  startedAt     DateTime?
+  endedAt       DateTime?
+
+  // Mux
+  muxStreamId   String?
+  muxPlaybackId String?
+
+  // Metadata
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  products      StreamProduct[]
+  events        StreamEvent[]
+
+  @@index([shop])
+}
+
+model StreamProduct {
+  id           String   @id @default(uuid())
+  streamId     String
+  productId    String   // Shopify product ID
+  variantId    String?  // Optional (future-proof)
+  position     Int      // Order in stream
+  featuredAt   DateTime?
+
+  stream       Stream   @relation(fields: [streamId], references: [id], onDelete: Cascade)
+
+  @@index([streamId])
+}
+
+model StreamEvent {
+  id         String   @id @default(uuid())
+  streamId   String
+  type       StreamEventType
+  payload    Json?
+  createdAt  DateTime @default(now())
+
+  stream     Stream   @relation(fields: [streamId], references: [id], onDelete: Cascade)
+
+  @@index([streamId])
+}
