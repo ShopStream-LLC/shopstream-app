@@ -6,14 +6,14 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   return null;
 };
 
-export default function AppIndex() {
+export default function Clips() {
   return (
-    <s-page heading="Welcome to StreamCart Live">
-      <s-section heading="Get started">
+    <s-page heading="Clips">
+      <s-section heading="Stream clips">
         <s-paragraph>
-          Welcome to StreamCart Live! Start by creating your first live stream.
+          No clips yet. Clips will appear here after your streams. Each product
+          featured during a stream will generate an auto-clip using Mux.
         </s-paragraph>
-        <s-button href="/app/streams">Go to Streams</s-button>
       </s-section>
     </s-page>
   );
