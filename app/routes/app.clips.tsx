@@ -1,4 +1,5 @@
 import type { LoaderFunctionArgs } from "react-router";
+import { Page, Layout, Card, Text, EmptyState } from "@shopify/polaris";
 import { authenticate } from "../shopify.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
@@ -8,13 +9,22 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
 export default function Clips() {
   return (
-    <s-page heading="Clips">
-      <s-section heading="Stream clips">
-        <s-paragraph>
-          No clips yet. Clips will appear here after your streams. Each product
-          featured during a stream will generate an auto-clip using Mux.
-        </s-paragraph>
-      </s-section>
-    </s-page>
+    <Page title="Clips">
+      <Layout>
+        <Layout.Section>
+          <Card>
+            <EmptyState
+              heading="No clips yet"
+              image="https://cdn.shopify.com/s/files/1/0262/4071/2726/files/emptystate-files.png"
+            >
+              <Text as="p">
+                Clips will appear here after your streams. Each product
+                featured during a stream will generate an auto-clip using Mux.
+              </Text>
+            </EmptyState>
+          </Card>
+        </Layout.Section>
+      </Layout>
+    </Page>
   );
 }

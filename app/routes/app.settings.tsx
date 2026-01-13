@@ -1,4 +1,5 @@
 import type { LoaderFunctionArgs } from "react-router";
+import { Page, Layout, Card, Text } from "@shopify/polaris";
 import { authenticate } from "../shopify.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
@@ -8,24 +9,35 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
 export default function Settings() {
   return (
-    <s-page heading="Settings">
-      <s-section heading="Streaming">
-        <s-paragraph>
-          Streaming configuration settings will appear here.
-        </s-paragraph>
-      </s-section>
-
-      <s-section heading="Notifications">
-        <s-paragraph>
-          Notification preferences will appear here.
-        </s-paragraph>
-      </s-section>
-
-      <s-section heading="Integrations">
-        <s-paragraph>
-          Integration settings will appear here.
-        </s-paragraph>
-      </s-section>
-    </s-page>
+    <Page title="Settings">
+      <Layout>
+        <Layout.Section>
+          <Card>
+            <Text as="h2" variant="headingMd">
+              Streaming
+            </Text>
+            <Text as="p" variant="bodyMd">
+              Streaming configuration settings will appear here.
+            </Text>
+          </Card>
+          <Card>
+            <Text as="h2" variant="headingMd">
+              Notifications
+            </Text>
+            <Text as="p" variant="bodyMd">
+              Notification preferences will appear here.
+            </Text>
+          </Card>
+          <Card>
+            <Text as="h2" variant="headingMd">
+              Integrations
+            </Text>
+            <Text as="p" variant="bodyMd">
+              Integration settings will appear here.
+            </Text>
+          </Card>
+        </Layout.Section>
+      </Layout>
+    </Page>
   );
 }
