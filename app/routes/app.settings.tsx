@@ -1,10 +1,4 @@
-import type { LoaderFunctionArgs } from "react-router";
 import { Page, Layout, Card, Text } from "@shopify/polaris";
-
-export const loader = async ({ request }: LoaderFunctionArgs) => {
-  // No shop needed, parent route already authenticates
-  return null;
-};
 
 export default function Settings() {
   return (

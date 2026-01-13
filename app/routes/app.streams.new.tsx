@@ -1,13 +1,8 @@
-import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
+import type { ActionFunctionArgs } from "react-router";
 import { Form, redirect, useNavigate, useActionData, useNavigation } from "react-router";
 import { Page, Layout, Card, Text, Button, Banner } from "@shopify/polaris";
 import { requireShopSession } from "../auth.server";
 import db from "../db.server";
-
-export const loader = async ({ request }: LoaderFunctionArgs) => {
-  // No shop needed in loader, but parent route already authenticates
-  return null;
-};
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   try {
