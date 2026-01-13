@@ -1,12 +1,11 @@
 import type { LoaderFunctionArgs } from "react-router";
 import { useLoaderData, useNavigate } from "react-router";
 import { Page, Layout, Card, Text, Button, EmptyState } from "@shopify/polaris";
-import { authenticate } from "../shopify.server";
+import { requireShopSession } from "../auth.server";
 import db from "../db.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
-  const shop = session.shop;
+  const { shop } = await requireShopSession(request);
 
   const streams = await db.stream.findMany({
     where: { shop },

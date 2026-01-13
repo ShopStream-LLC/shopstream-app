@@ -1,10 +1,9 @@
 import type { LoaderFunctionArgs } from "react-router";
 import { useNavigate } from "react-router";
 import { Page, Layout, Card, Text, Button } from "@shopify/polaris";
-import { authenticate } from "../shopify.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  await authenticate.admin(request);
+  // No shop needed, parent route already authenticates
   return null;
 };
 
