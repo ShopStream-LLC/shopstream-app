@@ -1,4 +1,3 @@
-import type { Request } from "react-router";
 import { authenticate } from "./shopify.server";
 
 /**
