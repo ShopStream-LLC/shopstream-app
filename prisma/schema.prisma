@@ -64,6 +64,7 @@ model Stream {
   // Mux
   muxStreamId   String?
   muxPlaybackId String?
+  muxRtmpUrl    String?
 
   // Metadata
   createdAt     DateTime @default(now())

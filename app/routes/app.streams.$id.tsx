@@ -1,5 +1,5 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
-import { Form, redirect, useLoaderData, useNavigate, useActionData, useNavigation, useFetcher } from "react-router";
+import { Form, redirect, useLoaderData, useNavigate, useActionData, useNavigation, useFetcher, useRevalidator } from "react-router";
 import { useState, useCallback, useEffect, useRef } from "react";
 import { Page, Layout, Card, Text, Button, TextField, RadioButton, Banner, Thumbnail } from "@shopify/polaris";
 import {
@@ -21,6 +21,7 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import { requireShopSession } from "../auth.server";
 import db from "../db.server";
+import { mux } from "../lib/mux.server";
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const { shop, admin } = await requireShopSession(request);
@@ -86,9 +87,42 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     })
   );
 
+  // Fetch Mux stream details if stream is prepared
+  let muxStreamDetails = null;
+  let isStreamLive = false;
+  if (stream.muxStreamId) {
+    try {
+      const muxStream = await mux.video.liveStreams.retrieve(stream.muxStreamId);
+      muxStreamDetails = {
+        rtmpUrl: stream.muxRtmpUrl || "rtmps://global-live.mux.com:443/app",
+        streamKey: muxStream.stream_key || null,
+        status: muxStream.status || null,
+      };
+    } catch (error) {
+      console.error("Error fetching Mux stream details:", error);
+      // Continue without Mux details
+    }
+
+    // Check Redis for real-time stream state (more reliable than Mux API status)
+    try {
+      const { redis } = await import("../lib/redis.server");
+      const redisState = await redis.get(`stream:${streamId}:state`);
+      isStreamLive = redisState === "live";
+      
+      // Log only on state transitions (not every single request)
+      // This avoids flooding the console during live streams
+    } catch (error) {
+      console.error("Error fetching Redis state:", error);
+      // Fallback to database status
+      isStreamLive = stream.status === "LIVE";
+    }
+  }
+
   return { 
     stream, 
     productDetails,
+    muxStreamDetails,
+    isStreamLive,
     apiKey: process.env.SHOPIFY_API_KEY || "",
   };
 };
@@ -419,6 +453,48 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       return redirect(`/app/streams/${streamId}`);
     }
 
+    if (actionType === "prepareStream") {
+      // Check if stream already has Mux stream
+      if (existingStream.muxStreamId) {
+        return {
+          error: "Stream is already prepared",
+        };
+      }
+
+      try {
+        // Create Mux live stream
+        const liveStream = await mux.video.liveStreams.create({
+          playback_policy: ["public"],
+          new_asset_settings: {
+            playback_policy: ["public"],
+          },
+        });
+
+        // Extract RTMP URL from Mux response
+        const rtmpUrl = (liveStream as any).rtmp?.url || "rtmps://global-live.mux.com:443/app";
+
+        // Save to DB
+        const playbackId = liveStream.playback_ids?.[0]?.id || null;
+        console.log(`[Prepare Stream] Created Mux stream ${liveStream.id}, playbackId: ${playbackId}`);
+        
+        await db.stream.update({
+          where: { id: streamId },
+          data: {
+            muxStreamId: liveStream.id,
+            muxPlaybackId: playbackId,
+            muxRtmpUrl: rtmpUrl,
+          },
+        });
+
+        return redirect(`/app/streams/${streamId}`);
+      } catch (error) {
+        console.error("Error creating Mux stream:", error);
+        return {
+          error: error instanceof Error ? error.message : "Failed to create Mux stream. Please check server logs.",
+        };
+      }
+    }
+
     return redirect(`/app/streams/${streamId}`);
   } catch (error) {
     console.error("Error in action:", error);
@@ -680,15 +756,9 @@ function ProductLineup({
   onOrderChange: (newOrder: ProductDetail[]) => void;
   onRemove: (streamProductId: string) => void;
 }) {
-  const [isClient, setIsClient] = useState(false);
-
-  // Only enable drag-and-drop on client side (not during SSR)
-  useEffect(() => {
-    setIsClient(true);
-  }, []);
-
-  // Render static version during SSR, draggable version on client
-  if (!isClient) {
+  // Prevent dnd-kit hooks from running during server-side rendering
+  // typeof window check runs before any hooks, completely preventing SSR execution
+  if (typeof window === "undefined") {
     return (
       <StaticProductLineup
         productDetails={productDetails}
@@ -832,11 +902,47 @@ function SortableProductItem({
   );
 }
 
+// Helper component for copying stream key
+function CopyStreamKeyButton({ streamKey }: { streamKey: string }) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = useCallback(() => {
+    navigator.clipboard.writeText(streamKey).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  }, [streamKey]);
+
+  return (
+    <Button size="micro" onClick={handleCopy}>
+      {copied ? "Copied!" : "Copy"}
+    </Button>
+  );
+}
+
+// Helper component to mask stream key
+function MaskedStreamKey({ streamKey }: { streamKey: string }) {
+  if (streamKey.length <= 8) {
+    return <Text as="span" variant="bodyMd">••••••••</Text>;
+  }
+  const visible = streamKey.slice(0, 4);
+  const masked = "•".repeat(streamKey.length - 8);
+  const end = streamKey.slice(-4);
+  return (
+    <span style={{ fontFamily: "monospace" }}>
+      <Text as="span" variant="bodyMd">
+        {visible}{masked}{end}
+      </Text>
+    </span>
+  );
+}
+
 export default function StreamDashboard() {
-  const { stream, productDetails, apiKey } = useLoaderData<typeof loader>();
+  const { stream, productDetails, muxStreamDetails, isStreamLive, apiKey } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
   const navigate = useNavigate();
+  const revalidator = useRevalidator();
   const isSubmitting = navigation.state === "submitting";
 
   // Form state
@@ -857,6 +963,43 @@ export default function StreamDashboard() {
     setRemovedProducts([]);
     setNewProductIds([]); // Clear new products after save
   }, [productDetails]);
+
+  // Poll for stream status updates when stream is prepared
+  // Note: We use conservative polling intervals to avoid overwhelming the server
+  useEffect(() => {
+    // Don't poll if stream isn't prepared yet
+    if (!stream.muxStreamId) {
+      return;
+    }
+
+    // Determine polling frequency based on status
+    let pollInterval: number | null = null;
+    
+    if (stream.status === "SCHEDULED" || stream.status === "DRAFT") {
+      // Poll every 15 seconds when waiting for stream to start
+      pollInterval = 15000;
+    } else if (stream.status === "ENDED") {
+      // Poll for 5 minutes after ending (in case stream restarts)
+      const endedAt = stream.endedAt ? new Date(stream.endedAt) : null;
+      const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+      if (endedAt && endedAt < fiveMinutesAgo) {
+        return; // Don't poll if stream ended over 5 minutes ago
+      }
+      pollInterval = 15000;
+    }
+    // Note: Don't poll when LIVE - it creates too much load and isn't needed
+    // The stream will stay live until you stop it, and webhooks handle state changes
+    
+    if (!pollInterval) {
+      return; // No polling needed for this status
+    }
+
+    const interval = setInterval(() => {
+      revalidator.revalidate();
+    }, pollInterval);
+
+    return () => clearInterval(interval);
+  }, [stream.muxStreamId, stream.status, stream.endedAt, stream.id, revalidator]);
   
   // Format scheduledAt for date/time inputs
   const scheduledDate = stream.scheduledAt
@@ -1088,15 +1231,132 @@ export default function StreamDashboard() {
               </div>
             )}
           </Card> */}
-          {/* <Card>
+          
+          <Card>
             <Text as="h2" variant="headingMd">
-              Stream preview
+              Streaming setup
             </Text>
-            <Text as="p" variant="bodyMd">
-              Stream preview will appear here. This will show the live Mux video feed
-              with controls for pause/resume.
-            </Text>
-          </Card> */}
+            
+            {!stream.muxStreamId ? (
+              <div>
+                <div style={{ marginBottom: "16px" }}>
+                  <Text as="p" variant="bodyMd" tone="subdued">
+                    Prepare your stream to get RTMP credentials for OBS or your streaming app.
+                  </Text>
+                </div>
+                <Form method="post">
+                  <input type="hidden" name="actionType" value="prepareStream" />
+                  <Button submit variant="primary" loading={isSubmitting && navigation.formData?.get("actionType") === "prepareStream"}>
+                    Prepare stream
+                  </Button>
+                </Form>
+              </div>
+            ) : (
+              <div>
+                {muxStreamDetails && (
+                  <>
+                    <div style={{ marginTop: "16px" }}>
+                      <Text as="p" variant="bodyMd" fontWeight="semibold">
+                        RTMP Server URL
+                      </Text>
+                      <div style={{ marginTop: "8px", padding: "12px", backgroundColor: "#f6f6f7", borderRadius: "4px" }}>
+                        <Text as="p" variant="bodyMd">
+                          <span style={{ fontFamily: "monospace" }}>
+                            {muxStreamDetails.rtmpUrl || "Not available"}
+                          </span>
+                        </Text>
+                      </div>
+                    </div>
+
+                    {muxStreamDetails.streamKey && (
+                      <div style={{ marginTop: "16px" }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
+                          <Text as="p" variant="bodyMd" fontWeight="semibold">
+                            Stream Key
+                          </Text>
+                          <CopyStreamKeyButton streamKey={muxStreamDetails.streamKey} />
+                        </div>
+                        <div style={{ padding: "12px", backgroundColor: "#f6f6f7", borderRadius: "4px" }}>
+                          <MaskedStreamKey streamKey={muxStreamDetails.streamKey} />
+                        </div>
+                      </div>
+                    )}
+
+                    <div style={{ marginTop: "16px" }}>
+                      <Text as="p" variant="bodySm" tone="subdued">
+                        Use these credentials in OBS or your streaming app to start broadcasting.
+                      </Text>
+                    </div>
+
+                    <div style={{ marginTop: "24px" }}>
+                      <div style={{ marginBottom: "8px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <Text as="p" variant="bodyMd" fontWeight="semibold">
+                          Live Preview
+                        </Text>
+                        <div style={{ display: "flex", gap: "12px", alignItems: "center" }}>
+                          <div style={{ display: "flex", gap: "8px", fontSize: "12px", color: "#6d7175" }}>
+                            <span>Status: {stream.status}</span>
+                            <span>•</span>
+                            <span>Redis: {isStreamLive ? "Live" : "Not live"}</span>
+                            <span>•</span>
+                            <span>Playback ID: {stream.muxPlaybackId ? "✓" : "✗"}</span>
+                          </div>
+                          {stream.muxStreamId && (
+                            <Button 
+                              size="micro" 
+                              onClick={() => revalidator.revalidate()}
+                              loading={revalidator.state === "loading"}
+                            >
+                              Refresh
+                            </Button>
+                          )}
+                        </div>
+                      </div>
+                      {isStreamLive && stream.muxPlaybackId ? (
+                        <div style={{ position: "relative", width: "100%", paddingTop: "56.25%", backgroundColor: "#000", borderRadius: "4px", overflow: "hidden" }}>
+                          <video
+                            key={stream.muxPlaybackId}
+                            src={`https://stream.mux.com/${stream.muxPlaybackId}.m3u8`}
+                            controls
+                            muted
+                            autoPlay
+                            playsInline
+                            style={{
+                              position: "absolute",
+                              top: 0,
+                              left: 0,
+                              width: "100%",
+                              height: "100%",
+                              objectFit: "contain",
+                            }}
+                          />
+                        </div>
+                      ) : (
+                        <div style={{ padding: "48px", backgroundColor: "#f6f6f7", borderRadius: "4px", textAlign: "center" }}>
+                          <Text as="p" variant="bodyMd" tone="subdued">
+                            {!stream.muxPlaybackId 
+                              ? "Waiting for playback ID. Start streaming from OBS to initialize."
+                              : !isStreamLive
+                              ? "Stream not active yet. Start streaming from OBS to see the preview."
+                              : "Initializing preview..."
+                            }
+                          </Text>
+                          {!stream.muxPlaybackId && (
+                            <div style={{ marginTop: "8px" }}>
+                              <Text as="p" variant="bodySm" tone="subdued">
+                                Note: Playback ID is usually created within 10-15 seconds after you start streaming.
+                              </Text>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+          </Card>
+          
           <Card>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
               <Text as="h2" variant="headingMd">
