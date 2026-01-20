@@ -2,7 +2,7 @@
 
 client_id = "fbee6122d8e29ea1394b6a3224b82cb1"
 name = "StreamCart Live"
-application_url = "https://thermoelectronic-imputedly-carmelia.ngrok-free.dev"
+application_url = "https://shopstream-app-production.up.railway.app"
 embedded = true
 
 [build]
@@ -28,5 +28,5 @@ use_legacy_install_flow = false
 
 [auth]
 redirect_urls = [
-  "https://thermoelectronic-imputedly-carmelia.ngrok-free.dev/api/auth"
+  "https://shopstream-app-production.up.railway.app/api/auth"
 ]
