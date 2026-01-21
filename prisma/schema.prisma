@@ -54,6 +54,7 @@ model Stream {
   shop          String   // shop domain
   title         String
   description   String?
+  thumbnailUrl  String?  // Shopify CDN URL for stream thumbnail
   status        StreamStatus @default(DRAFT)
 
   // Scheduling

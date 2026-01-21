@@ -1,27 +1,13 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
-import { Form, redirect, useLoaderData, useNavigate, useActionData, useNavigation, useFetcher, useRevalidator } from "react-router";
+import { Form, redirect, useLoaderData, useNavigate, useActionData, useNavigation, useRevalidator, useSubmit } from "react-router";
 import { useState, useCallback, useEffect, useRef } from "react";
-import { Page, Layout, Card, Text, Button, TextField, RadioButton, Banner, Thumbnail } from "@shopify/polaris";
-import {
-  DndContext,
-  closestCenter,
-  KeyboardSensor,
-  PointerSensor,
-  useSensor,
-  useSensors,
-  type DragEndEvent,
-} from "@dnd-kit/core";
-import {
-  arrayMove,
-  SortableContext,
-  sortableKeyboardCoordinates,
-  verticalListSortingStrategy,
-  useSortable,
-} from "@dnd-kit/sortable";
-import { CSS } from "@dnd-kit/utilities";
+import { Page, Layout, Card, Text, Button, TextField, RadioButton, Banner } from "@shopify/polaris";
 import { requireShopSession } from "../auth.server";
 import db from "../db.server";
 import { mux } from "../lib/mux.server";
+import { ProductPickerButton, ProductLineup, type ProductDetail } from "../components/ProductLineup";
+import { ThumbnailUpload } from "../components/ThumbnailUpload";
+import { uploadFileToShopify } from "../lib/shopify-upload.server";
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const { shop, admin } = await requireShopSession(request);
@@ -237,12 +223,33 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         status = "SCHEDULED";
       }
 
+      // Handle thumbnail upload
+      const thumbnailFile = formData.get("thumbnail") as File | null;
+      const removeThumbnail = formData.get("removeThumbnail") === "true";
+      
+      let thumbnailUrl = existingStream.thumbnailUrl;
+      
+      if (removeThumbnail) {
+        thumbnailUrl = null;
+      } else if (thumbnailFile && thumbnailFile.size > 0) {
+        // Upload to Shopify CDN
+        const uploadedUrl = await uploadFileToShopify(
+          admin,
+          thumbnailFile,
+          `Thumbnail for ${title}`
+        );
+        if (uploadedUrl) {
+          thumbnailUrl = uploadedUrl;
+        }
+      }
+
       // Update stream
       await db.stream.update({
         where: { id: streamId },
         data: {
           title: title.trim(),
           description: description?.trim() || null,
+          thumbnailUrl,
           scheduledAt,
           status,
         },
@@ -519,388 +526,6 @@ function getStatusLabel(status: string): string {
   }
 }
 
-type ProductDetail = {
-  streamProduct: {
-    id: string;
-    productId: string;
-    position: number;
-  };
-  product: {
-    id: string;
-    title: string;
-    featuredImage: {
-      url: string;
-      altText: string | null;
-    } | null;
-    totalInventory: number;
-  } | null;
-};
-
-function ProductPickerButton({ streamId, apiKey }: { streamId: string; apiKey: string }) {
-  const fetcher = useFetcher();
-
-  const handleOpenPicker = useCallback(() => {
-    // Dynamically import both App Bridge and ResourcePicker
-    Promise.all([
-      import("@shopify/app-bridge"),
-      import("@shopify/app-bridge/actions")
-    ]).then(([{ createApp }, { ResourcePicker }]) => {
-      // Prefer host from sessionStorage (persisted by /app shell), fallback to URL parsing.
-      const urlParams = new URLSearchParams(window.location.search);
-      let shopifyHost =
-        urlParams.get("host") ||
-        window.sessionStorage.getItem("shopifyHost") ||
-        "";
-
-      if (!shopifyHost) {
-        const match = window.location.href.match(/[?&]host=([^&]+)/);
-        if (match) shopifyHost = decodeURIComponent(match[1]);
-      }
-
-      if (!apiKey || !shopifyHost) {
-        console.error("Missing API key or host. Cannot create App Bridge client.", { apiKey: !!apiKey, host: shopifyHost });
-        return;
-      }
-
-      // Create App Bridge client
-      const app = createApp({
-        apiKey,
-        host: shopifyHost,
-      });
-
-      const picker = ResourcePicker.create(app, {
-        resourceType: ResourcePicker.ResourceType.Product,
-        selectMultiple: true,
-      } as any);
-
-      picker.subscribe(ResourcePicker.Action.SELECT, (payload: { selection: Array<{ id: string }> }) => {
-        const productIds = payload.selection.map((item) => item.id);
-        
-        if (productIds.length > 0) {
-          const formData = new FormData();
-          formData.append("actionType", "addProducts");
-          formData.append("productIds", JSON.stringify(productIds));
-          
-          fetcher.submit(formData, { method: "post" });
-        }
-      });
-
-      picker.dispatch(ResourcePicker.Action.OPEN);
-    }).catch((error) => {
-      console.error("Error loading ResourcePicker:", error);
-    });
-  }, [apiKey, fetcher]);
-
-  return (
-    <Button onClick={handleOpenPicker} loading={fetcher.state !== "idle"}>
-      Add products
-    </Button>
-  );
-}
-
-// Client-only drag-and-drop component
-function DraggableProductLineup({ 
-  productDetails, 
-  onOrderChange,
-  onRemove
-}: { 
-  productDetails: ProductDetail[];
-  onOrderChange: (newOrder: ProductDetail[]) => void;
-  onRemove: (streamProductId: string) => void;
-}) {
-  const [items, setItems] = useState(productDetails);
-
-  // Update local state when productDetails change (e.g., after adding products)
-  useEffect(() => {
-    setItems(productDetails);
-  }, [productDetails]);
-
-  const sensors = useSensors(
-    useSensor(PointerSensor),
-    useSensor(KeyboardSensor, {
-      coordinateGetter: sortableKeyboardCoordinates,
-    })
-  );
-
-  const handleDragEnd = (event: DragEndEvent) => {
-    const { active, over } = event;
-
-    if (over && active.id !== over.id) {
-      setItems((items) => {
-        const oldIndex = items.findIndex((item) => item.streamProduct.id === active.id);
-        const newIndex = items.findIndex((item) => item.streamProduct.id === over.id);
-        const newItems = arrayMove(items, oldIndex, newIndex);
-        onOrderChange(newItems);
-        return newItems;
-      });
-    }
-  };
-
-  const handleRemove = (streamProductId: string) => {
-    const newItems = items.filter((item) => item.streamProduct.id !== streamProductId);
-    setItems(newItems);
-    onRemove(streamProductId);
-    onOrderChange(newItems);
-  };
-
-  return (
-    <DndContext
-      sensors={sensors}
-      collisionDetection={closestCenter}
-      onDragEnd={handleDragEnd}
-    >
-      <SortableContext
-        items={items.map((item) => item.streamProduct.id)}
-        strategy={verticalListSortingStrategy}
-      >
-        <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-          {items.map(({ streamProduct, product }, index) => (
-            <SortableProductItem
-              key={streamProduct.id}
-              streamProduct={streamProduct}
-              product={product}
-              index={index}
-              onRemove={handleRemove}
-            />
-          ))}
-        </div>
-      </SortableContext>
-    </DndContext>
-  );
-}
-
-// Static fallback for SSR
-function StaticProductLineup({ 
-  productDetails, 
-  onRemove
-}: { 
-  productDetails: ProductDetail[];
-  onRemove: (streamProductId: string) => void;
-}) {
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-      {productDetails.map(({ streamProduct, product }, index) => (
-        <div
-          key={streamProduct.id}
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: "12px",
-            padding: "12px",
-            border: "1px solid #e1e3e5",
-            borderRadius: "4px",
-          }}
-        >
-          <div style={{ minWidth: "40px", textAlign: "center" }}>
-            <Text as="span" variant="bodyMd" fontWeight="semibold">
-              {index + 1}
-            </Text>
-          </div>
-          
-          {product?.featuredImage?.url ? (
-            <Thumbnail
-              source={product.featuredImage.url}
-              alt={product.featuredImage.altText || product.title}
-              size="small"
-            />
-          ) : (
-            <div
-              style={{
-                width: "40px",
-                height: "40px",
-                backgroundColor: "#f6f6f7",
-                borderRadius: "4px",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-              }}
-            >
-              <Text as="span" variant="bodySm" tone="subdued">
-                No image
-              </Text>
-            </div>
-          )}
-          
-          <div style={{ flex: 1 }}>
-            <Text as="p" variant="bodyMd" fontWeight="semibold">
-              {product?.title || "Product not found"}
-            </Text>
-            {product && (
-              <Text as="p" variant="bodySm" tone="subdued">
-                Inventory: {product.totalInventory}
-              </Text>
-            )}
-          </div>
-
-          <Button
-            size="micro"
-            tone="critical"
-            onClick={() => onRemove(streamProduct.id)}
-          >
-            Remove
-          </Button>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function ProductLineup({ 
-  productDetails, 
-  streamId,
-  onOrderChange,
-  onRemove
-}: { 
-  productDetails: ProductDetail[];
-  streamId: string;
-  onOrderChange: (newOrder: ProductDetail[]) => void;
-  onRemove: (streamProductId: string) => void;
-}) {
-  // Prevent dnd-kit hooks from running during server-side rendering
-  // typeof window check runs before any hooks, completely preventing SSR execution
-  if (typeof window === "undefined") {
-    return (
-      <StaticProductLineup
-        productDetails={productDetails}
-        onRemove={onRemove}
-      />
-    );
-  }
-
-  return (
-    <DraggableProductLineup
-      productDetails={productDetails}
-      onOrderChange={onOrderChange}
-      onRemove={onRemove}
-    />
-  );
-}
-
-function SortableProductItem({
-  streamProduct,
-  product,
-  index,
-  onRemove,
-}: {
-  streamProduct: { id: string; productId: string; position: number };
-  product: {
-    id: string;
-    title: string;
-    featuredImage: { url: string; altText: string | null } | null;
-    totalInventory: number;
-  } | null;
-  index: number;
-  onRemove: (id: string) => void;
-}) {
-  const {
-    attributes,
-    listeners,
-    setNodeRef,
-    transform,
-    transition,
-    isDragging,
-  } = useSortable({ id: streamProduct.id });
-
-  const style = {
-    transform: CSS.Transform.toString(transform),
-    transition,
-    opacity: isDragging ? 0.5 : 1,
-    cursor: isDragging ? "grabbing" : "grab",
-  };
-
-  return (
-    <div
-      ref={setNodeRef}
-      style={{
-        ...style,
-        display: "flex",
-        alignItems: "center",
-        gap: "12px",
-        padding: "12px",
-        border: "1px solid #e1e3e5",
-        borderRadius: "4px",
-        backgroundColor: isDragging ? "#f6f6f7" : "white",
-      }}
-    >
-      {/* Drag handle icon */}
-      <div
-        {...attributes}
-        {...listeners}
-        style={{
-          cursor: "grab",
-          padding: "8px",
-          display: "flex",
-          alignItems: "center",
-          color: "#6d7175",
-        }}
-      >
-        <svg
-          width="20"
-          height="20"
-          viewBox="0 0 20 20"
-          fill="none"
-          xmlns="http://www.w3.org/2000/svg"
-        >
-          <circle cx="7" cy="7" r="1.5" fill="currentColor" />
-          <circle cx="13" cy="7" r="1.5" fill="currentColor" />
-          <circle cx="7" cy="10" r="1.5" fill="currentColor" />
-          <circle cx="13" cy="10" r="1.5" fill="currentColor" />
-          <circle cx="7" cy="13" r="1.5" fill="currentColor" />
-          <circle cx="13" cy="13" r="1.5" fill="currentColor" />
-        </svg>
-      </div>
-
-      <div style={{ minWidth: "40px", textAlign: "center" }}>
-        <Text as="span" variant="bodyMd" fontWeight="semibold">
-          {index + 1}
-        </Text>
-      </div>
-
-      {product?.featuredImage?.url ? (
-        <Thumbnail
-          source={product.featuredImage.url}
-          alt={product.featuredImage.altText || product.title}
-          size="small"
-        />
-      ) : (
-        <div
-          style={{
-            width: "40px",
-            height: "40px",
-            backgroundColor: "#f6f6f7",
-            borderRadius: "4px",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-          }}
-        >
-          <Text as="span" variant="bodySm" tone="subdued">
-            No image
-          </Text>
-        </div>
-      )}
-
-      <div style={{ flex: 1 }}>
-        <Text as="p" variant="bodyMd" fontWeight="semibold">
-          {product?.title || "Product not found"}
-        </Text>
-        {product && (
-          <Text as="p" variant="bodySm" tone="subdued">
-            Inventory: {product.totalInventory}
-          </Text>
-        )}
-      </div>
-
-      <Button
-        size="micro"
-        tone="critical"
-        onClick={() => onRemove(streamProduct.id)}
-      >
-        Remove
-      </Button>
-    </div>
-  );
-}
 
 // Helper component for copying stream key
 function CopyStreamKeyButton({ streamKey }: { streamKey: string }) {
@@ -956,6 +581,10 @@ export default function StreamDashboard() {
   const [productLineupOrder, setProductLineupOrder] = useState<ProductDetail[]>(productDetails);
   const [removedProducts, setRemovedProducts] = useState<string[]>([]);
   const [newProductIds, setNewProductIds] = useState<string[]>([]);
+  
+  // Thumbnail state
+  const [thumbnailFile, setThumbnailFile] = useState<File | null>(null);
+  const [removeThumbnail, setRemoveThumbnail] = useState(false);
   
   // Update local state when productDetails change (e.g., after save)
   useEffect(() => {
@@ -1067,6 +696,32 @@ export default function StreamDashboard() {
     });
   }, []); // Remove productLineupOrder.length dependency to prevent infinite loop
 
+  const handleThumbnailSelect = useCallback((file: File) => {
+    setThumbnailFile(file);
+    setRemoveThumbnail(false);
+  }, []);
+
+  const handleThumbnailRemove = useCallback(() => {
+    setThumbnailFile(null);
+    setRemoveThumbnail(true);
+  }, []);
+
+  const formRef = useRef<HTMLFormElement>(null);
+  const submit = useSubmit();
+
+  const handleSubmit = useCallback((e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    
+    const formData = new FormData(e.currentTarget);
+    
+    // Manually append the file if it exists
+    if (thumbnailFile) {
+      formData.set("thumbnail", thumbnailFile);
+    }
+    
+    submit(formData, { method: "post", encType: "multipart/form-data" });
+  }, [thumbnailFile, submit]);
+
   return (
     <Page
       title={stream.title}
@@ -1083,7 +738,7 @@ export default function StreamDashboard() {
             </Banner>
           )}
           <Card>
-            <Form method="post">
+            <form ref={formRef} method="post" encType="multipart/form-data" onSubmit={handleSubmit}>
               <input type="hidden" name="actionType" value="updateStream" />
               <input 
                 type="hidden" 
@@ -1142,6 +797,16 @@ export default function StreamDashboard() {
                   autoComplete="off"
                 />
               </div>
+
+              <ThumbnailUpload
+                currentThumbnailUrl={stream.thumbnailUrl}
+                onThumbnailSelect={handleThumbnailSelect}
+                onThumbnailRemove={handleThumbnailRemove}
+              />
+              
+              {removeThumbnail && (
+                <input type="hidden" name="removeThumbnail" value="true" />
+              )}
 
               <div style={{ marginTop: "24px" }}>
                 <Text as="p" variant="bodyMd" fontWeight="semibold">
@@ -1204,7 +869,7 @@ export default function StreamDashboard() {
                   Back to streams
                 </Button>
               </div>
-            </Form>
+            </form>
           </Card>
           
           {/* <Card>
@@ -1374,7 +1039,6 @@ export default function StreamDashboard() {
             ) : (
               <ProductLineup
                 productDetails={productLineupOrder}
-                streamId={stream.id}
                 onOrderChange={handleProductOrderChange}
                 onRemove={handleProductRemove}
               />
