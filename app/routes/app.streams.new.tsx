@@ -1,10 +1,12 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
-import { Form, redirect, useLoaderData, useNavigate, useActionData, useNavigation } from "react-router";
-import { useState, useCallback } from "react";
+import { redirect, useLoaderData, useNavigate, useActionData, useNavigation, useSubmit } from "react-router";
+import { useState, useCallback, useRef } from "react";
 import { Page, Layout, Card, Text, Button, TextField, RadioButton, Banner } from "@shopify/polaris";
 import { requireShopSession } from "../auth.server";
 import db from "../db.server";
 import { ProductPickerButton, ProductLineup, type ProductDetail } from "../components/ProductLineup";
+import { ThumbnailUpload } from "../components/ThumbnailUpload";
+import { uploadFileToShopify } from "../lib/shopify-upload.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   await requireShopSession(request);
@@ -102,12 +104,33 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         status = "SCHEDULED";
       }
 
+      // Handle thumbnail upload
+      const thumbnailFile = formData.get("thumbnail") as File | null;
+      let thumbnailUrl: string | null = null;
+      
+      console.log("[Thumbnail Debug - Create] thumbnailFile:", thumbnailFile);
+      console.log("[Thumbnail Debug - Create] thumbnailFile type:", typeof thumbnailFile);
+      console.log("[Thumbnail Debug - Create] thumbnailFile size:", thumbnailFile?.size);
+      
+      if (thumbnailFile && thumbnailFile.size > 0) {
+        console.log("[Thumbnail Debug - Create] Attempting to upload file to Shopify");
+        thumbnailUrl = await uploadFileToShopify(
+          admin,
+          thumbnailFile,
+          `Thumbnail for ${title}`
+        );
+        console.log("[Thumbnail Debug - Create] Upload result:", thumbnailUrl);
+      } else {
+        console.log("[Thumbnail Debug - Create] No file to upload - file is null or size is 0");
+      }
+
       // Create stream
       const stream = await db.stream.create({
         data: {
           shop,
           title: title.trim(),
           description: description?.trim() || null,
+          thumbnailUrl,
           scheduledAt,
           status,
         },
@@ -164,6 +187,9 @@ export default function CreateStream() {
   // Product lineup state
   const [productLineupOrder, setProductLineupOrder] = useState<ProductDetail[]>([]);
 
+  // Thumbnail state
+  const [thumbnailFile, setThumbnailFile] = useState<File | null>(null);
+
   const handleProductOrderChange = useCallback((newOrder: ProductDetail[]) => {
     setProductLineupOrder(newOrder);
   }, []);
@@ -200,6 +226,30 @@ export default function CreateStream() {
     });
   }, []);
 
+  const handleThumbnailSelect = useCallback((file: File) => {
+    setThumbnailFile(file);
+  }, []);
+
+  const handleThumbnailRemove = useCallback(() => {
+    setThumbnailFile(null);
+  }, []);
+
+  const formRef = useRef<HTMLFormElement>(null);
+  const submit = useSubmit();
+
+  const handleSubmit = useCallback((e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    
+    const formData = new FormData(e.currentTarget);
+    
+    // Manually append the file if it exists
+    if (thumbnailFile) {
+      formData.set("thumbnail", thumbnailFile);
+    }
+    
+    submit(formData, { method: "post", encType: "multipart/form-data" });
+  }, [thumbnailFile, submit]);
+
   return (
     <Page
       title="Create stream"
@@ -216,7 +266,7 @@ export default function CreateStream() {
             </Banner>
           )}
           <Card>
-            <Form method="post">
+            <form ref={formRef} method="post" encType="multipart/form-data" onSubmit={handleSubmit}>
               <input type="hidden" name="actionType" value="createStream" />
               <input 
                 type="hidden" 
@@ -253,6 +303,12 @@ export default function CreateStream() {
                   autoComplete="off"
                 />
               </div>
+
+              <ThumbnailUpload
+                currentThumbnailUrl={null}
+                onThumbnailSelect={handleThumbnailSelect}
+                onThumbnailRemove={handleThumbnailRemove}
+              />
 
               <div style={{ marginTop: "24px" }}>
                 <Text as="p" variant="bodyMd" fontWeight="semibold">
@@ -315,7 +371,7 @@ export default function CreateStream() {
                   Cancel
                 </Button>
               </div>
-            </Form>
+            </form>
           </Card>
           
           <Card>

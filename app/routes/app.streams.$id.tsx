@@ -1,11 +1,13 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
-import { Form, redirect, useLoaderData, useNavigate, useActionData, useNavigation, useRevalidator } from "react-router";
-import { useState, useCallback, useEffect } from "react";
+import { Form, redirect, useLoaderData, useNavigate, useActionData, useNavigation, useRevalidator, useSubmit } from "react-router";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { Page, Layout, Card, Text, Button, TextField, RadioButton, Banner } from "@shopify/polaris";
 import { requireShopSession } from "../auth.server";
 import db from "../db.server";
 import { mux } from "../lib/mux.server";
 import { ProductPickerButton, ProductLineup, type ProductDetail } from "../components/ProductLineup";
+import { ThumbnailUpload } from "../components/ThumbnailUpload";
+import { uploadFileToShopify } from "../lib/shopify-upload.server";
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const { shop, admin } = await requireShopSession(request);
@@ -221,12 +223,33 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         status = "SCHEDULED";
       }
 
+      // Handle thumbnail upload
+      const thumbnailFile = formData.get("thumbnail") as File | null;
+      const removeThumbnail = formData.get("removeThumbnail") === "true";
+      
+      let thumbnailUrl = existingStream.thumbnailUrl;
+      
+      if (removeThumbnail) {
+        thumbnailUrl = null;
+      } else if (thumbnailFile && thumbnailFile.size > 0) {
+        // Upload to Shopify CDN
+        const uploadedUrl = await uploadFileToShopify(
+          admin,
+          thumbnailFile,
+          `Thumbnail for ${title}`
+        );
+        if (uploadedUrl) {
+          thumbnailUrl = uploadedUrl;
+        }
+      }
+
       // Update stream
       await db.stream.update({
         where: { id: streamId },
         data: {
           title: title.trim(),
           description: description?.trim() || null,
+          thumbnailUrl,
           scheduledAt,
           status,
         },
@@ -559,6 +582,10 @@ export default function StreamDashboard() {
   const [removedProducts, setRemovedProducts] = useState<string[]>([]);
   const [newProductIds, setNewProductIds] = useState<string[]>([]);
   
+  // Thumbnail state
+  const [thumbnailFile, setThumbnailFile] = useState<File | null>(null);
+  const [removeThumbnail, setRemoveThumbnail] = useState(false);
+  
   // Update local state when productDetails change (e.g., after save)
   useEffect(() => {
     setProductLineupOrder(productDetails);
@@ -669,6 +696,32 @@ export default function StreamDashboard() {
     });
   }, []); // Remove productLineupOrder.length dependency to prevent infinite loop
 
+  const handleThumbnailSelect = useCallback((file: File) => {
+    setThumbnailFile(file);
+    setRemoveThumbnail(false);
+  }, []);
+
+  const handleThumbnailRemove = useCallback(() => {
+    setThumbnailFile(null);
+    setRemoveThumbnail(true);
+  }, []);
+
+  const formRef = useRef<HTMLFormElement>(null);
+  const submit = useSubmit();
+
+  const handleSubmit = useCallback((e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    
+    const formData = new FormData(e.currentTarget);
+    
+    // Manually append the file if it exists
+    if (thumbnailFile) {
+      formData.set("thumbnail", thumbnailFile);
+    }
+    
+    submit(formData, { method: "post", encType: "multipart/form-data" });
+  }, [thumbnailFile, submit]);
+
   return (
     <Page
       title={stream.title}
@@ -685,7 +738,7 @@ export default function StreamDashboard() {
             </Banner>
           )}
           <Card>
-            <Form method="post">
+            <form ref={formRef} method="post" encType="multipart/form-data" onSubmit={handleSubmit}>
               <input type="hidden" name="actionType" value="updateStream" />
               <input 
                 type="hidden" 
@@ -744,6 +797,16 @@ export default function StreamDashboard() {
                   autoComplete="off"
                 />
               </div>
+
+              <ThumbnailUpload
+                currentThumbnailUrl={stream.thumbnailUrl}
+                onThumbnailSelect={handleThumbnailSelect}
+                onThumbnailRemove={handleThumbnailRemove}
+              />
+              
+              {removeThumbnail && (
+                <input type="hidden" name="removeThumbnail" value="true" />
+              )}
 
               <div style={{ marginTop: "24px" }}>
                 <Text as="p" variant="bodyMd" fontWeight="semibold">
@@ -806,7 +869,7 @@ export default function StreamDashboard() {
                   Back to streams
                 </Button>
               </div>
-            </Form>
+            </form>
           </Card>
           
           {/* <Card>
