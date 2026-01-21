@@ -1,6 +1,6 @@
 import type { LoaderFunctionArgs } from "react-router";
 import { useLoaderData, useNavigate } from "react-router";
-import { Page, Layout, Card, Text, Button, EmptyState } from "@shopify/polaris";
+import { Page, Layout, Card, Text, EmptyState } from "@shopify/polaris";
 import { requireShopSession } from "../auth.server";
 import db from "../db.server";
 
@@ -65,9 +65,6 @@ export default function Streams() {
                   Create your first live stream to start selling to your
                   audience in real-time.
                 </Text>
-                <Button onClick={() => navigate("/app/streams/new")}>
-                  Create your first stream
-                </Button>
               </EmptyState>
             </Card>
           ) : (

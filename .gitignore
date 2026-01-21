@@ -28,3 +28,7 @@ database.sqlite
 
 .cursor/
 .gemini/
+
+# Hide toml files per environment
+shopify.app.dev.toml
+shopify.app.prod.toml
