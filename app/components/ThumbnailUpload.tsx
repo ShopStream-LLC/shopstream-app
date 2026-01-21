@@ -63,24 +63,31 @@ export function ThumbnailUpload({
           <BlockStack gap="200">
             <div
               style={{
-                border: "1px solid #e1e3e5",
-                borderRadius: "8px",
-                padding: "8px",
-                display: "inline-block",
+                display: "flex",
+                justifyContent: "center",
               }}
             >
-              <img
-                src={preview}
-                alt="Stream thumbnail"
+              <div
                 style={{
-                  maxWidth: "300px",
-                  maxHeight: "200px",
-                  borderRadius: "4px",
-                  display: "block",
+                  border: "1px solid #e1e3e5",
+                  borderRadius: "8px",
+                  padding: "8px",
+                  display: "inline-block",
                 }}
-              />
+              >
+                <img
+                  src={preview}
+                  alt="Stream thumbnail"
+                  style={{
+                    maxWidth: "300px",
+                    maxHeight: "200px",
+                    borderRadius: "4px",
+                    display: "block",
+                  }}
+                />
+              </div>
             </div>
-            <div>
+            <div style={{ display: "flex", justifyContent: "center" }}>
               <Button size="slim" onClick={handleRemove}>
                 Remove thumbnail
               </Button>
