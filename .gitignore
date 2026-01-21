@@ -32,3 +32,4 @@ database.sqlite
 # Hide toml files per environment
 shopify.app.dev.toml
 shopify.app.prod.toml
+
