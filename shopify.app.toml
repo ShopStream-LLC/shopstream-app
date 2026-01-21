@@ -1,8 +1,8 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
-client_id = "431453c9ad953dd836ed0fdafa2478d8"
-name = "StreamCart Live (Dev)"
-application_url = "https://thermoelectronic-imputedly-carmelia.ngrok-free.dev"
+client_id = "fbee6122d8e29ea1394b6a3224b82cb1"
+name = "StreamCart Live"
+application_url = "https://shopstream-app-production.up.railway.app"
 embedded = true
 
 [build]
@@ -10,7 +10,7 @@ automatically_update_urls_on_dev = false
 include_config_on_deploy = true
 
 [webhooks]
-api_version = "2026-01"
+api_version = "2026-04"
 
   [[webhooks.subscriptions]]
   topics = [ "app/scopes_update" ]
@@ -28,5 +28,5 @@ use_legacy_install_flow = false
 
 [auth]
 redirect_urls = [
-  "https://thermoelectronic-imputedly-carmelia.ngrok-free.dev/api/auth"
+  "https://shopstream-app-production.up.railway.app/api/auth"
 ]

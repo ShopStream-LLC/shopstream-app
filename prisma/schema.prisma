@@ -63,9 +63,10 @@ model Stream {
   endedAt       DateTime?
 
   // Mux
-  muxStreamId   String?
-  muxPlaybackId String?
-  muxRtmpUrl    String?
+  muxStreamId     String?
+  muxPlaybackId   String?
+  muxRtmpUrl      String?
+  muxLatencyMode  String? @default("standard") // "low" for LL-HLS, "standard" for regular HLS
 
   // Metadata
   createdAt     DateTime @default(now())

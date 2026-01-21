@@ -470,9 +470,10 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       }
 
       try {
-        // Create Mux live stream
+        // Create Mux live stream with low latency mode for LL-HLS
         const liveStream = await mux.video.liveStreams.create({
           playback_policy: ["public"],
+          latency_mode: "low", // Enable LL-HLS for ~3-8 second latency
           new_asset_settings: {
             playback_policy: ["public"],
           },
@@ -491,6 +492,8 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
             muxStreamId: liveStream.id,
             muxPlaybackId: playbackId,
             muxRtmpUrl: rtmpUrl,
+            // @ts-ignore - Prisma client will be regenerated on next dev server restart
+            muxLatencyMode: "low", // Track that this stream uses LL-HLS
           },
         });
 
@@ -590,6 +593,9 @@ export default function StreamDashboard() {
   // Video ref for HLS.js
   const videoRef = useRef<HTMLVideoElement>(null);
   
+  // Latency tracking for LL-HLS
+  const [currentLatency, setCurrentLatency] = useState<number | null>(null);
+  
   // Update local state when productDetails change (e.g., after save)
   useEffect(() => {
     setProductLineupOrder(productDetails);
@@ -646,22 +652,79 @@ export default function StreamDashboard() {
 
     if (Hls.isSupported()) {
       hls = new Hls({
+        // Core LL-HLS settings
         enableWorker: true,
         lowLatencyMode: true,
-        backBufferLength: 90,
+        
+        // Buffer management - keep minimal for low latency
+        maxBufferLength: 10,          // Target 10 seconds max buffer
+        maxMaxBufferLength: 20,        // Hard limit 20 seconds
+        backBufferLength: 0,           // No back buffer for live
+        maxBufferSize: 60 * 1000 * 1000, // 60MB
+        maxBufferHole: 0.5,            // Tolerate 0.5s gaps
+        
+        // Fragment loading - faster timeouts
+        fragLoadingTimeOut: 2000,      // 2 seconds
+        manifestLoadingTimeOut: 2000,  // 2 seconds
+        levelLoadingTimeOut: 2000,     // 2 seconds
+        
+        // Live sync - aggressive edge tracking
+        liveSyncDurationCount: 2,      // Stay 2 segments from live edge
+        liveMaxLatencyDurationCount: 4, // Max 4 segments behind
+        liveDurationInfinity: false,
+        liveBackBufferLength: 0,
+        
+        // LL-HLS specific
+        highBufferWatchdogPeriod: 1,   // Check buffer every 1s
+        nudgeOffset: 0.1,              // Small offset for corrections
+        nudgeMaxRetry: 5,
+        
+        // Network optimization
+        startLevel: -1,                // Auto quality
+        testBandwidth: true,
+        progressive: true,
       });
       
       hls.loadSource(hlsUrl);
       hls.attachMedia(video);
       
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
-        // Seek to live edge for live streams
+        // For LL-HLS, seek closer to live edge
         if (video.duration !== Infinity && !isNaN(video.duration)) {
-          video.currentTime = video.duration;
+          // Start 0.5s behind live edge for buffer safety
+          video.currentTime = video.duration - 0.5;
         }
+        
         video.play().catch((error) => {
-          console.error("Error playing video:", error);
+          console.error("[LL-HLS] Error playing video:", error);
         });
+      });
+      
+      // Monitor and maintain live edge position
+      hls.on(Hls.Events.LEVEL_UPDATED, () => {
+        if (!video.paused && video.duration !== Infinity && !isNaN(video.duration)) {
+          const liveEdge = video.duration;
+          const currentTime = video.currentTime;
+          const latency = liveEdge - currentTime;
+          
+          // If we're falling behind (> 6 seconds), jump to live edge
+          if (latency > 6) {
+            console.log(`[LL-HLS] Jumping to live edge. Latency was: ${latency.toFixed(2)}s`);
+            video.currentTime = liveEdge - 0.5; // Slightly behind edge for safety
+          }
+        }
+      });
+      
+      // Log actual latency for monitoring and update UI
+      hls.on(Hls.Events.FRAG_LOADED, (event, data) => {
+        // Check if we're playing a live stream
+        if (video.duration !== Infinity && !isNaN(video.duration)) {
+          const latency = video.duration - video.currentTime;
+          if (latency >= 0) {
+            console.log(`[LL-HLS] Current latency: ${latency.toFixed(2)}s`);
+            setCurrentLatency(latency);
+          }
+        }
       });
       
       hls.on(Hls.Events.ERROR, (event, data) => {
@@ -1035,6 +1098,12 @@ export default function StreamDashboard() {
                             <span>Redis: {isStreamLive ? "Live" : "Not live"}</span>
                             <span>•</span>
                             <span>Playback ID: {stream.muxPlaybackId ? "✓" : "✗"}</span>
+                            {currentLatency !== null && (
+                              <>
+                                <span>•</span>
+                                <span>Latency: {currentLatency.toFixed(1)}s</span>
+                              </>
+                            )}
                           </div>
                           {stream.muxStreamId && (
                             <Button 
