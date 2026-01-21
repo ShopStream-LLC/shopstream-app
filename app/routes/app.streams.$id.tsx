@@ -2,6 +2,7 @@ import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { Form, redirect, useLoaderData, useNavigate, useActionData, useNavigation, useRevalidator, useSubmit } from "react-router";
 import { useState, useCallback, useEffect, useRef } from "react";
 import { Page, Layout, Card, Text, Button, TextField, RadioButton, Banner } from "@shopify/polaris";
+import Hls from "hls.js";
 import { requireShopSession } from "../auth.server";
 import db from "../db.server";
 import { mux } from "../lib/mux.server";
@@ -586,6 +587,9 @@ export default function StreamDashboard() {
   const [thumbnailFile, setThumbnailFile] = useState<File | null>(null);
   const [removeThumbnail, setRemoveThumbnail] = useState(false);
   
+  // Video ref for HLS.js
+  const videoRef = useRef<HTMLVideoElement>(null);
+  
   // Update local state when productDetails change (e.g., after save)
   useEffect(() => {
     setProductLineupOrder(productDetails);
@@ -629,6 +633,72 @@ export default function StreamDashboard() {
 
     return () => clearInterval(interval);
   }, [stream.muxStreamId, stream.status, stream.endedAt, stream.id, revalidator]);
+  
+  // HLS.js setup for live streaming
+  useEffect(() => {
+    if (!isStreamLive || !stream.muxPlaybackId || !videoRef.current) {
+      return;
+    }
+
+    const video = videoRef.current;
+    const hlsUrl = `https://stream.mux.com/${stream.muxPlaybackId}.m3u8`;
+    let hls: Hls | null = null;
+
+    if (Hls.isSupported()) {
+      hls = new Hls({
+        enableWorker: true,
+        lowLatencyMode: true,
+        backBufferLength: 90,
+      });
+      
+      hls.loadSource(hlsUrl);
+      hls.attachMedia(video);
+      
+      hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        // Seek to live edge for live streams
+        if (video.duration !== Infinity && !isNaN(video.duration)) {
+          video.currentTime = video.duration;
+        }
+        video.play().catch((error) => {
+          console.error("Error playing video:", error);
+        });
+      });
+      
+      hls.on(Hls.Events.ERROR, (event, data) => {
+        if (data.fatal) {
+          switch (data.type) {
+            case Hls.ErrorTypes.NETWORK_ERROR:
+              console.log("Fatal network error, trying to recover...");
+              hls?.startLoad();
+              break;
+            case Hls.ErrorTypes.MEDIA_ERROR:
+              console.log("Fatal media error, trying to recover...");
+              hls?.recoverMediaError();
+              break;
+            default:
+              console.log("Fatal error, cannot recover");
+              hls?.destroy();
+              break;
+          }
+        }
+      });
+    } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
+      // Native HLS support (Safari)
+      video.src = hlsUrl;
+      video.addEventListener("loadedmetadata", () => {
+        // Seek to live edge
+        if (video.duration !== Infinity && !isNaN(video.duration)) {
+          video.currentTime = video.duration;
+        }
+      });
+    }
+
+    return () => {
+      if (hls) {
+        hls.destroy();
+      }
+    };
+  }, [isStreamLive, stream.muxPlaybackId]);
   
   // Format scheduledAt for date/time inputs
   const scheduledDate = stream.scheduledAt
@@ -980,8 +1050,8 @@ export default function StreamDashboard() {
                       {isStreamLive && stream.muxPlaybackId ? (
                         <div style={{ position: "relative", width: "100%", paddingTop: "56.25%", backgroundColor: "#000", borderRadius: "4px", overflow: "hidden" }}>
                           <video
+                            ref={videoRef}
                             key={stream.muxPlaybackId}
-                            src={`https://stream.mux.com/${stream.muxPlaybackId}.m3u8`}
                             controls
                             muted
                             autoPlay
