@@ -87,6 +87,14 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         };
       }
 
+      // Validate product lineup
+      const lineupOrder = lineupOrderJson ? JSON.parse(lineupOrderJson) : [];
+      if (!lineupOrder || lineupOrder.length === 0) {
+        return {
+          error: "At least one product is required in the lineup",
+        };
+      }
+
       // Determine scheduledAt and status
       let scheduledAt: Date | null = null;
       let status: "DRAFT" | "SCHEDULED" = "DRAFT";
