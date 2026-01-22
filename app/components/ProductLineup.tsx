@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { Button, Text, Thumbnail } from "@shopify/polaris";
 import {
   DndContext,
@@ -44,6 +44,7 @@ type ProductPickerButtonProps = {
 
 export function ProductPickerButton({ streamId, apiKey, onProductsSelected }: ProductPickerButtonProps) {
   const fetcher = useFetcher();
+  const lastProcessedData = useRef<any>(null);
 
   const handleOpenPicker = useCallback(() => {
     // Dynamically import both App Bridge and ResourcePicker
@@ -104,10 +105,25 @@ export function ProductPickerButton({ streamId, apiKey, onProductsSelected }: Pr
     });
   }, [apiKey, fetcher, streamId]);
 
+  // Store callback in ref to avoid dependency issues
+  const onProductsSelectedRef = useRef(onProductsSelected);
+  useEffect(() => {
+    onProductsSelectedRef.current = onProductsSelected;
+  }, [onProductsSelected]);
+
   // Handle fetcher response for new stream (when onProductsSelected is provided)
   useEffect(() => {
-    if (onProductsSelected && fetcher.data && (fetcher.data as any).productDetails) {
-      const productDetails = (fetcher.data as any).productDetails as Array<{
+    // Skip if no callback, no data, or we've already processed this data
+    if (!onProductsSelectedRef.current || !fetcher.data || fetcher.data === lastProcessedData.current) {
+      return;
+    }
+
+    const data = fetcher.data as any;
+    if (data.productDetails) {
+      // Mark this data as processed
+      lastProcessedData.current = fetcher.data;
+
+      const productDetails = data.productDetails as Array<{
         productId: string;
         product: {
           id: string;
@@ -127,9 +143,10 @@ export function ProductPickerButton({ streamId, apiKey, onProductsSelected }: Pr
         product: pd.product,
       }));
 
-      onProductsSelected(products);
+      onProductsSelectedRef.current(products);
     }
-  }, [fetcher.data, onProductsSelected]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fetcher.data]);
 
   return (
     <Button onClick={handleOpenPicker} loading={fetcher.state !== "idle"}>
@@ -139,7 +156,7 @@ export function ProductPickerButton({ streamId, apiKey, onProductsSelected }: Pr
 }
 
 // Client-only drag-and-drop component
-function DraggableProductLineup({ 
+export function DraggableProductLineup({ 
   productDetails, 
   onOrderChange,
   onRemove
@@ -156,7 +173,11 @@ function DraggableProductLineup({
   }, [productDetails]);
 
   const sensors = useSensors(
-    useSensor(PointerSensor),
+    useSensor(PointerSensor, {
+      activationConstraint: {
+        distance: 8, // Require 8px of movement before activating drag
+      },
+    }),
     useSensor(KeyboardSensor, {
       coordinateGetter: sortableKeyboardCoordinates,
     })
@@ -357,18 +378,20 @@ function SortableProductItem({
         border: "1px solid #e1e3e5",
         borderRadius: "4px",
         backgroundColor: isDragging ? "#f6f6f7" : "white",
+        cursor: "grab",
+        userSelect: "none",
       }}
+      {...attributes}
+      {...listeners}
     >
       {/* Drag handle icon */}
       <div
-        {...attributes}
-        {...listeners}
         style={{
-          cursor: "grab",
           padding: "8px",
           display: "flex",
           alignItems: "center",
           color: "#6d7175",
+          pointerEvents: "none", // Prevent double event handling
         }}
       >
         <svg

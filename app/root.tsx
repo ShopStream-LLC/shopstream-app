@@ -1,5 +1,6 @@
 import { Links, Meta, Outlet, Scripts, ScrollRestoration } from "react-router";
 import "@shopify/polaris/build/esm/styles.css";
+import "./styles/animations.css";
 
 export default function App() {
   return (

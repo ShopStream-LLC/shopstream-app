@@ -34,6 +34,12 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     throw new Response("Stream not found", { status: 404 });
   }
 
+  // If stream is LIVE and we're on the edit page (not the live page), redirect to live page
+  const url = new URL(request.url);
+  if (stream.status === "LIVE" && !url.pathname.endsWith("/live")) {
+    return redirect(`/app/streams/${streamId}/live`);
+  }
+
   // Fetch product details from Shopify Admin API
   const productDetails = await Promise.all(
     stream.products.map(async (streamProduct) => {
@@ -504,6 +510,51 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
           error: error instanceof Error ? error.message : "Failed to create Mux stream. Please check server logs.",
         };
       }
+    }
+
+    if (actionType === "startStream") {
+      // Update stream status to LIVE and set liveStartedAt
+      await db.stream.update({
+        where: { id: streamId },
+        data: {
+          status: "LIVE",
+          liveStartedAt: new Date(),
+          startedAt: new Date(),
+        },
+      });
+
+      // Insert STREAM_STARTED event
+      await db.streamEvent.create({
+        data: {
+          streamId,
+          type: "STREAM_STARTED",
+          payload: {},
+        },
+      });
+
+      return redirect(`/app/streams/${streamId}/live`);
+    }
+
+    if (actionType === "endStream") {
+      // Update stream status to ENDED
+      await db.stream.update({
+        where: { id: streamId },
+        data: {
+          status: "ENDED",
+          endedAt: new Date(),
+        },
+      });
+
+      // Insert STREAM_ENDED event
+      await db.streamEvent.create({
+        data: {
+          streamId,
+          type: "STREAM_ENDED",
+          payload: {},
+        },
+      });
+
+      return redirect(`/app/streams`);
     }
 
     return redirect(`/app/streams/${streamId}`);

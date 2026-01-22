@@ -447,7 +447,7 @@ export default function Streams() {
       title="Streams"
       primaryAction={{
         content: "Create stream",
-        onAction: () => navigate("/app/streams/new"),
+        onAction: () => navigate("/app/streams/new/products"),
       }}
     >
       <Layout>
