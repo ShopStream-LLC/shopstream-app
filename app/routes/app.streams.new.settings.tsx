@@ -65,11 +65,34 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const description = formData.get("description") as string | null;
     const tagsJson = formData.get("tags") as string;
     const tags = tagsJson ? JSON.parse(tagsJson) : [];
+    const startOption = formData.get("startOption") as string;
+    const scheduledDate = formData.get("scheduledDate") as string | null;
+    const scheduledTime = formData.get("scheduledTime") as string | null;
+    const isRecurring = formData.get("isRecurring") === "true";
+    const recurringFrequency = formData.get("recurringFrequency") as string | null;
+    const multicastFacebook = formData.get("multicastFacebook") === "true";
+    const multicastInstagram = formData.get("multicastInstagram") === "true";
+    const multicastTiktok = formData.get("multicastTiktok") === "true";
     const thumbnailFile = formData.get("thumbnail") as File | null;
 
     // Validate title
     if (!title || title.trim() === "") {
       return { error: "Title is required" };
+    }
+
+    // Determine scheduledAt and status
+    let scheduledAt: Date | null = null;
+    let status: "DRAFT" | "SCHEDULED" = "DRAFT";
+
+    if (startOption === "schedule" && scheduledDate && scheduledTime) {
+      const dateTimeString = `${scheduledDate}T${scheduledTime}`;
+      scheduledAt = new Date(dateTimeString);
+
+      if (scheduledAt <= new Date()) {
+        return { error: "Scheduled time must be in the future" };
+      }
+
+      status = "SCHEDULED";
     }
 
     // Upload thumbnail if provided
@@ -90,6 +113,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         title: title.trim(),
         description: description?.trim() || null,
         tags,
+        scheduledAt,
+        status,
+        isRecurring,
+        recurringFrequency: isRecurring ? recurringFrequency : null,
+        multicastFacebook,
+        multicastInstagram,
+        multicastTiktok,
         thumbnailUrl,
       },
     });
@@ -181,9 +211,19 @@ export default function StreamSettingsPage() {
   const [tags, setTags] = useState<string[]>(stream.tags || []);
   const [thumbnail, setThumbnail] = useState<File | null>(null);
   const [thumbnailPreview, setThumbnailPreview] = useState<string | null>(stream.thumbnailUrl);
-  const [startOption, setStartOption] = useState<"immediate" | "schedule">("immediate");
-  const [scheduledDate, setScheduledDate] = useState("");
-  const [scheduledTime, setScheduledTime] = useState("");
+  
+  // Initialize startOption and scheduled date/time from stream
+  const initialStartOption = stream.scheduledAt ? "schedule" : "immediate";
+  const initialScheduledDate = stream.scheduledAt
+    ? new Date(stream.scheduledAt).toISOString().split("T")[0]
+    : "";
+  const initialScheduledTime = stream.scheduledAt
+    ? new Date(stream.scheduledAt).toTimeString().slice(0, 5)
+    : "";
+  
+  const [startOption, setStartOption] = useState<"immediate" | "schedule">(initialStartOption);
+  const [scheduledDate, setScheduledDate] = useState(initialScheduledDate);
+  const [scheduledTime, setScheduledTime] = useState(initialScheduledTime);
   const [isRecurring, setIsRecurring] = useState(stream.isRecurring || false);
   const [recurringFrequency, setRecurringFrequency] = useState(stream.recurringFrequency || "weekly");
   const [multicastFacebook, setMulticastFacebook] = useState(stream.multicastFacebook || false);
@@ -208,6 +248,26 @@ export default function StreamSettingsPage() {
   const handleThumbnailRemove = () => {
     setThumbnail(null);
     setThumbnailPreview(stream.thumbnailUrl);
+  };
+
+  // Set default date/time when switching to "Schedule for later"
+  const handleStartOptionChange = (option: "immediate" | "schedule") => {
+    setStartOption(option);
+    
+    if (option === "schedule") {
+      // Set defaults only if date/time are not already set
+      if (!scheduledDate) {
+        // Default: 1 week from now
+        const oneWeekLater = new Date();
+        oneWeekLater.setDate(oneWeekLater.getDate() + 7);
+        setScheduledDate(oneWeekLater.toISOString().split("T")[0]);
+      }
+      
+      if (!scheduledTime) {
+        // Default: 6:00 PM
+        setScheduledTime("18:00");
+      }
+    }
   };
 
   const handleSubmit = (action: "saveDraft" | "continue") => {
@@ -329,13 +389,13 @@ export default function StreamSettingsPage() {
                   <InlineStack gap="200">
                     <Button
                       variant={startOption === "immediate" ? "primary" : undefined}
-                      onClick={() => setStartOption("immediate")}
+                      onClick={() => handleStartOptionChange("immediate")}
                     >
                       Start Immediately
                     </Button>
                     <Button
                       variant={startOption === "schedule" ? "primary" : undefined}
-                      onClick={() => setStartOption("schedule")}
+                      onClick={() => handleStartOptionChange("schedule")}
                     >
                       Schedule for Later
                     </Button>
