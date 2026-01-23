@@ -7,10 +7,89 @@ import db from "../db.server";
 import { ProductPickerButton, DraggableProductLineup, type ProductDetail } from "../components/ProductLineup";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  // Parent route (app.tsx) already handles authentication
-  // We just need to get the API key
+  const { shop, admin } = await requireShopSession(request);
+  const url = new URL(request.url);
+  const streamId = url.searchParams.get("streamId");
+
+  const apiKey = process.env.SHOPIFY_API_KEY || "";
+
+  // If editing an existing stream, load it with products
+  if (streamId) {
+    const stream = await db.stream.findFirst({
+      where: { id: streamId, shop },
+      include: {
+        products: {
+          orderBy: { position: "asc" },
+        },
+      },
+    });
+
+    if (!stream) {
+      throw new Response("Stream not found", { status: 404 });
+    }
+
+    // Fetch product details from Shopify Admin API
+    const productDetails = await Promise.all(
+      stream.products.map(async (streamProduct) => {
+        try {
+          // Extract product ID from GID (format: gid://shopify/Product/123)
+          const productId = streamProduct.productId.includes("/")
+            ? streamProduct.productId.split("/").pop()
+            : streamProduct.productId;
+
+          const response = await admin.graphql(`
+            query getProduct($id: ID!) {
+              product(id: $id) {
+                id
+                title
+                featuredImage {
+                  url
+                  altText
+                }
+                totalInventory
+              }
+            }
+          `, {
+            variables: { id: `gid://shopify/Product/${productId}` },
+          });
+
+          const data = await response.json();
+          return {
+            streamProduct: {
+              id: streamProduct.id,
+              productId: streamProduct.productId,
+              position: streamProduct.position,
+            },
+            product: data.data?.product || null,
+          };
+        } catch (error) {
+          console.error(`Error fetching product ${streamProduct.productId}:`, error);
+          return {
+            streamProduct: {
+              id: streamProduct.id,
+              productId: streamProduct.productId,
+              position: streamProduct.position,
+            },
+            product: null,
+          };
+        }
+      })
+    );
+
+    return {
+      apiKey,
+      streamId,
+      existingProducts: productDetails,
+      isEditing: true,
+    };
+  }
+
+  // New stream - no existing products
   return {
-    apiKey: process.env.SHOPIFY_API_KEY || "",
+    apiKey,
+    streamId: null,
+    existingProducts: [],
+    isEditing: false,
   };
 };
 
@@ -70,6 +149,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   if (actionType === "createDraftStream") {
     const productsJson = formData.get("products") as string;
     const products = JSON.parse(productsJson);
+    const existingStreamId = formData.get("streamId") as string | null;
 
     if (!products || products.length === 0) {
       return {
@@ -77,7 +157,40 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       };
     }
 
-    // Create draft stream with products
+    // If editing existing stream, update products
+    if (existingStreamId) {
+      const existingStream = await db.stream.findFirst({
+        where: { id: existingStreamId, shop },
+        include: { products: true },
+      });
+
+      if (!existingStream) {
+        return { error: "Stream not found" };
+      }
+
+      // Delete all existing products
+      await db.streamProduct.deleteMany({
+        where: { streamId: existingStreamId },
+      });
+
+      // Create new products with updated positions
+      await db.streamProduct.createMany({
+        data: products.map((product: any, index: number) => ({
+          streamId: existingStreamId,
+          productId: product.id,
+          position: index,
+        })),
+      });
+
+      // Return redirect URL for client-side navigation
+      return {
+        success: true,
+        redirect: `/app/streams/new/settings?streamId=${existingStreamId}`,
+        streamId: existingStreamId,
+      };
+    }
+
+    // Create new draft stream with products
     const stream = await db.stream.create({
       data: {
         shop,
@@ -104,13 +217,23 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 };
 
 export default function ProductSelectionPage() {
-  const { apiKey } = useLoaderData<typeof loader>();
+  const { apiKey, streamId, existingProducts, isEditing } = useLoaderData<typeof loader>();
   const navigate = useNavigate();
   const fetcher = useFetcher();
-  const [selectedProducts, setSelectedProducts] = useState<ProductDetail[]>([]);
+  const [selectedProducts, setSelectedProducts] = useState<ProductDetail[]>(existingProducts);
   const hasNavigated = useRef(false);
+  const initializedStreamId = useRef<string | null>(streamId);
 
-  // Handle redirect after successful stream creation
+  // Only sync existing products when streamId changes (navigation to different stream)
+  // Don't sync on every loader revalidation to avoid wiping out user's selections
+  useEffect(() => {
+    if (initializedStreamId.current !== streamId) {
+      initializedStreamId.current = streamId;
+      setSelectedProducts(existingProducts);
+    }
+  }, [streamId, existingProducts]);
+
+  // Handle redirect after successful stream creation/update
   useEffect(() => {
     if (hasNavigated.current || fetcher.state !== "idle") return;
     
@@ -169,13 +292,17 @@ export default function ProductSelectionPage() {
     formData.append("products", JSON.stringify(
       selectedProducts.map(p => ({ id: p.streamProduct.productId }))
     ));
+    // Include streamId if editing
+    if (streamId) {
+      formData.append("streamId", streamId);
+    }
     fetcher.submit(formData, { method: "post" });
   };
 
   return (
     <Page
-      title="Select Products"
-      subtitle="Choose products to feature in your live stream"
+      title={isEditing ? "Edit Products" : "Select Products"}
+      subtitle={isEditing ? "Update products in your live stream" : "Choose products to feature in your live stream"}
       backAction={{ content: "Streams", onAction: () => navigate("/app/streams") }}
       secondaryActions={[
         {
@@ -206,6 +333,7 @@ export default function ProductSelectionPage() {
                 <ProductPickerButton
                   apiKey={apiKey}
                   onProductsSelected={handleProductsSelected}
+                  existingProductIds={selectedProducts.map(p => p.streamProduct.productId)}
                 />
               </div>
 
