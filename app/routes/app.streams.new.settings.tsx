@@ -1,5 +1,5 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
-import { useLoaderData, useNavigate, useSubmit, useActionData } from "react-router";
+import { useLoaderData, useNavigate, useFetcher } from "react-router";
 import { useState, useRef, useEffect } from "react";
 import {
   Page,
@@ -94,6 +94,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       },
     });
 
+    // Return redirect data for client-side navigation (preserves embedded app session)
     return { success: true, redirect: "/app/streams" };
   }
 
@@ -170,10 +171,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 export default function StreamSettingsPage() {
   const { stream } = useLoaderData<typeof loader>();
   const navigate = useNavigate();
-  const submit = useSubmit();
-  const actionData = useActionData<typeof action>();
+  const fetcher = useFetcher();
   const formRef = useRef<HTMLFormElement>(null);
   const hasNavigated = useRef(false);
+  const [submittingAction, setSubmittingAction] = useState<"saveDraft" | "continue" | null>(null);
 
   const [title, setTitle] = useState(stream.title);
   const [description, setDescription] = useState(stream.description || "");
@@ -210,6 +211,7 @@ export default function StreamSettingsPage() {
   };
 
   const handleSubmit = (action: "saveDraft" | "continue") => {
+    setSubmittingAction(action); // Track which action is being submitted
     const formData = new FormData();
     formData.append("actionType", action);
     formData.append("streamId", stream.id);
@@ -229,18 +231,27 @@ export default function StreamSettingsPage() {
       formData.append("thumbnail", thumbnail);
     }
 
-    submit(formData, { method: "post", encType: "multipart/form-data" });
+    fetcher.submit(formData, { method: "post", encType: "multipart/form-data" });
   };
 
-  // Handle redirect after success
+  // Handle redirect after successful action (client-side navigation preserves embedded app session)
   useEffect(() => {
-    if (hasNavigated.current) return;
+    if (hasNavigated.current || fetcher.state !== "idle") return;
     
-    if (actionData?.success && actionData?.redirect) {
-      hasNavigated.current = true;
-      navigate(actionData.redirect);
+    if (fetcher.data && typeof fetcher.data === "object") {
+      const data = fetcher.data as any;
+      if (data.success && data.redirect) {
+        hasNavigated.current = true;
+        setSubmittingAction(null); // Reset submitting action
+        navigate(data.redirect);
+      }
     }
-  }, [actionData, navigate]);
+    // Reset submitting action when fetcher becomes idle (even if there was an error)
+    if (fetcher.state === "idle" && submittingAction) {
+      setSubmittingAction(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fetcher.data, fetcher.state]);
 
   const isTitleValid = title.trim() !== "";
 
@@ -250,27 +261,29 @@ export default function StreamSettingsPage() {
       subtitle="Configure your live streaming session"
       backAction={{
         content: "Back",
-        onAction: () => navigate(`/app/streams/new/products`),
+        onAction: () => navigate(`/app/streams/new/products?streamId=${stream.id}`),
       }}
       secondaryActions={[
         {
           content: "Save Draft",
-          disabled: !isTitleValid,
+          disabled: !isTitleValid || fetcher.state !== "idle",
+          loading: submittingAction === "saveDraft" && fetcher.state !== "idle",
           onAction: () => handleSubmit("saveDraft"),
         },
       ]}
       primaryAction={{
         content: "Next: Pre-Flight Check",
-        disabled: !isTitleValid,
+        disabled: !isTitleValid || fetcher.state !== "idle",
+        loading: submittingAction === "continue" && fetcher.state !== "idle",
         onAction: () => handleSubmit("continue"),
       }}
     >
       <form ref={formRef}>
         <Layout>
-          {actionData?.error && (
+          {fetcher.data && typeof fetcher.data === "object" && (fetcher.data as any).error && (
             <Layout.Section>
               <Banner tone="critical" title="Error">
-                {actionData.error}
+                {(fetcher.data as any).error}
               </Banner>
             </Layout.Section>
           )}

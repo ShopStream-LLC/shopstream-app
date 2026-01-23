@@ -40,11 +40,18 @@ type ProductPickerButtonProps = {
   streamId?: string;
   apiKey: string;
   onProductsSelected?: (products: ProductDetail[]) => void;
+  existingProductIds?: string[]; // Product IDs already in the lineup
 };
 
-export function ProductPickerButton({ streamId, apiKey, onProductsSelected }: ProductPickerButtonProps) {
+export function ProductPickerButton({ 
+  streamId, 
+  apiKey, 
+  onProductsSelected,
+  existingProductIds = []
+}: ProductPickerButtonProps) {
   const fetcher = useFetcher();
   const lastProcessedData = useRef<any>(null);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   const handleOpenPicker = useCallback(() => {
     // Dynamically import both App Bridge and ResourcePicker
@@ -81,21 +88,42 @@ export function ProductPickerButton({ streamId, apiKey, onProductsSelected }: Pr
       } as any);
 
       picker.subscribe(ResourcePicker.Action.SELECT, (payload: { selection: Array<{ id: string }> }) => {
-        const productIds = payload.selection.map((item) => item.id);
+        const selectedProductIds = payload.selection.map((item) => item.id);
         
-        if (productIds.length > 0) {
+        // Filter out products that are already in the lineup
+        const newProductIds = selectedProductIds.filter(
+          (id) => !existingProductIds.includes(id)
+        );
+        
+        // Check if any duplicates were filtered
+        const duplicateCount = selectedProductIds.length - newProductIds.length;
+        
+        if (duplicateCount > 0) {
+          // Show toast notification about filtered duplicates
+          setToastMessage(
+            `${duplicateCount} product${duplicateCount !== 1 ? "s" : ""} already in lineup. Only new products were added.`
+          );
+          // Auto-dismiss toast after 5 seconds
+          setTimeout(() => setToastMessage(null), 5000);
+        }
+        
+        if (newProductIds.length > 0) {
           const formData = new FormData();
           if (streamId) {
             // For existing stream, add products directly
             formData.append("actionType", "addProducts");
-            formData.append("productIds", JSON.stringify(productIds));
+            formData.append("productIds", JSON.stringify(newProductIds));
           } else {
             // For new stream, fetch product details first
             formData.append("actionType", "fetchProductDetails");
-            formData.append("productIds", JSON.stringify(productIds));
+            formData.append("productIds", JSON.stringify(newProductIds));
           }
           
           fetcher.submit(formData, { method: "post" });
+        } else if (selectedProductIds.length > 0) {
+          // All selected products were duplicates
+          setToastMessage("All selected products are already in the lineup.");
+          setTimeout(() => setToastMessage(null), 5000);
         }
       });
 
@@ -103,7 +131,7 @@ export function ProductPickerButton({ streamId, apiKey, onProductsSelected }: Pr
     }).catch((error) => {
       console.error("Error loading ResourcePicker:", error);
     });
-  }, [apiKey, fetcher, streamId]);
+  }, [apiKey, fetcher, streamId, existingProductIds]);
 
   // Store callback in ref to avoid dependency issues
   const onProductsSelectedRef = useRef(onProductsSelected);
@@ -149,9 +177,31 @@ export function ProductPickerButton({ streamId, apiKey, onProductsSelected }: Pr
   }, [fetcher.data]);
 
   return (
-    <Button onClick={handleOpenPicker} loading={fetcher.state !== "idle"}>
-      Add products
-    </Button>
+    <>
+      {toastMessage && (
+        <div
+          style={{
+            position: "fixed",
+            bottom: "20px",
+            right: "20px",
+            padding: "12px 16px",
+            backgroundColor: "#202223",
+            color: "white",
+            borderRadius: "6px",
+            boxShadow: "0 2px 8px rgba(0, 0, 0, 0.15)",
+            zIndex: 1000,
+            maxWidth: "400px",
+            fontSize: "14px",
+            lineHeight: "20px",
+          }}
+        >
+          {toastMessage}
+        </div>
+      )}
+      <Button onClick={handleOpenPicker} loading={fetcher.state !== "idle"}>
+        Add products
+      </Button>
+    </>
   );
 }
 

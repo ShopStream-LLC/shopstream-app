@@ -1220,6 +1220,7 @@ export default function StreamDashboard() {
               <ProductPickerButton 
                 streamId={stream.id} 
                 apiKey={apiKey}
+                existingProductIds={productLineupOrder.map(p => p.streamProduct.productId)}
               />
             </div>
             {productLineupOrder.length === 0 ? (

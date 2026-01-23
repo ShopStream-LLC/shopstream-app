@@ -252,13 +252,13 @@ function UpcomingStreamCard({ stream, navigate }: { stream: any; navigate: any }
         >
           <div>{getStatusBadge(stream.status)}</div>
           <Button
-            onClick={() => navigate(`/app/streams/${stream.id}`)}
+            onClick={() => navigate(`/app/streams/new/products?streamId=${stream.id}`)}
           >
             Edit
           </Button>
           <Button
             variant="primary"
-            onClick={() => navigate(`/app/streams/${stream.id}`)}
+            onClick={() => navigate(`/app/streams/new/preflight?streamId=${stream.id}`)}
           >
             Go Live
           </Button>
