@@ -9,6 +9,7 @@ import { mux } from "../lib/mux.server";
 import { ProductPickerButton, ProductLineup, type ProductDetail } from "../components/ProductLineup";
 import { ThumbnailUpload } from "../components/ThumbnailUpload";
 import { uploadFileToShopify } from "../lib/shopify-upload.server";
+import { getClipPlaybackUrl } from "../lib/video-playback.server";
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const { shop, admin } = await requireShopSession(request);
@@ -26,6 +27,9 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     include: {
       products: {
         orderBy: { position: "asc" },
+      },
+      clips: {
+        orderBy: { createdAt: "desc" },
       },
     },
   });
@@ -618,6 +622,7 @@ function MaskedStreamKey({ streamKey }: { streamKey: string }) {
 
 export default function StreamDashboard() {
   const { stream, productDetails, muxStreamDetails, isStreamLive, apiKey } = useLoaderData<typeof loader>();
+  const clips = stream.clips || [];
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
   const navigate = useNavigate();
@@ -1234,6 +1239,70 @@ export default function StreamDashboard() {
               />
             )}
           </Card>
+          
+          {/* Clips section - only show for ended streams with clips */}
+          {stream.status === "ENDED" && clips.length > 0 && (
+            <Card>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
+                <Text as="h2" variant="headingMd">
+                  Clips
+                </Text>
+                <Button onClick={() => navigate(`/app/streams/${stream.id}/analytics`)}>
+                  View Analytics & Create Clips
+                </Button>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+                {clips.map((clip) => {
+                  const playbackUrl = getClipPlaybackUrl(clip);
+                  const duration = clip.endTime - clip.startTime;
+                  const minutes = Math.floor(duration / 60);
+                  const seconds = duration % 60;
+                  
+                  return (
+                    <div
+                      key={clip.id}
+                      style={{
+                        padding: "16px",
+                        border: "1px solid #e1e3e5",
+                        borderRadius: "8px",
+                      }}
+                    >
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "start", marginBottom: "8px" }}>
+                        <div>
+                          <Text as="p" variant="bodyMd" fontWeight="semibold">
+                            {clip.title || `Clip: ${clip.startTime}s - ${clip.endTime}s`}
+                          </Text>
+                          {clip.description && (
+                            <Text as="p" variant="bodySm" tone="subdued" style={{ marginTop: "4px" }}>
+                              {clip.description}
+                            </Text>
+                          )}
+                        </div>
+                      </div>
+                      <div style={{ marginTop: "8px" }}>
+                        <Text as="p" variant="bodySm" tone="subdued">
+                          Duration: {minutes}m {seconds}s • Created: {new Date(clip.createdAt).toLocaleDateString()}
+                        </Text>
+                      </div>
+                      {playbackUrl && (
+                        <div style={{ marginTop: "12px" }}>
+                          <video
+                            controls
+                            style={{
+                              width: "100%",
+                              maxWidth: "600px",
+                              borderRadius: "4px",
+                            }}
+                            src={playbackUrl}
+                          />
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </Card>
+          )}
         </Layout.Section>
         <Layout.Section variant="oneThird">
           {/* <Card>

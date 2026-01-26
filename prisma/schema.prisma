@@ -14,21 +14,21 @@ datasource db {
 }
 
 model Session {
-  id            String    @id
-  shop          String
-  state         String
-  isOnline      Boolean   @default(false)
-  scope         String?
-  expires       DateTime?
-  accessToken   String
-  userId        BigInt?
-  firstName     String?
-  lastName      String?
-  email         String?
-  accountOwner  Boolean   @default(false)
-  locale        String?
-  collaborator  Boolean?  @default(false)
-  emailVerified Boolean?  @default(false)
+  id                  String    @id
+  shop                String
+  state               String
+  isOnline            Boolean   @default(false)
+  scope               String?
+  expires             DateTime?
+  accessToken         String
+  userId              BigInt?
+  firstName           String?
+  lastName            String?
+  email               String?
+  accountOwner        Boolean   @default(false)
+  locale              String?
+  collaborator        Boolean?  @default(false)
+  emailVerified       Boolean?  @default(false)
   refreshToken        String?
   refreshTokenExpires DateTime?
 }
@@ -50,70 +50,110 @@ enum StreamEventType {
 }
 
 model Stream {
-  id            String   @id @default(uuid())
-  shop          String   // shop domain
-  title         String
-  description   String?
-  thumbnailUrl  String?  // Shopify CDN URL for stream thumbnail
-  status        StreamStatus @default(DRAFT)
+  id           String       @id @default(uuid())
+  shop         String // shop domain
+  title        String
+  description  String?
+  thumbnailUrl String? // Shopify CDN URL for stream thumbnail
+  status       StreamStatus @default(DRAFT)
 
   // Scheduling
-  scheduledAt   DateTime?
-  startedAt     DateTime?
-  endedAt       DateTime?
+  scheduledAt DateTime?
+  startedAt   DateTime?
+  endedAt     DateTime?
 
   // Mux
-  muxStreamId     String?
-  muxPlaybackId   String?
-  muxRtmpUrl      String?
-  muxLatencyMode  String? @default("standard") // "low" for LL-HLS, "standard" for regular HLS
+  muxStreamId    String?
+  muxPlaybackId  String? // Live stream playback ID
+  muxRtmpUrl     String?
+  muxLatencyMode String? @default("standard") // "low" for LL-HLS, "standard" for regular HLS
+
+  // Mux Asset (recorded video after stream ends)
+  muxAssetId         String? // Mux Asset ID for the recorded video
+  muxAssetPlaybackId String? // Asset playback ID for replay
+  muxAssetCreatedAt  DateTime? // When asset was created
+
+  // Shopify storage (after 90 days migration)
+  shopifyVideoId      String? // Shopify File ID after migration
+  shopifyVideoUrl     String? // Shopify CDN URL after migration
+  migratedToShopifyAt DateTime? // Migration timestamp
 
   // Tags
-  tags            String[] @default([])
+  tags String[] @default([])
 
   // Recurring stream settings (UI only for now)
-  isRecurring         Boolean @default(false)
-  recurringFrequency  String? // "daily" | "weekly" | "monthly"
+  isRecurring        Boolean @default(false)
+  recurringFrequency String? // "daily" | "weekly" | "monthly"
 
   // Multi-cast settings (UI only for now)
-  multicastFacebook   Boolean @default(false)
-  multicastInstagram  Boolean @default(false)
-  multicastTiktok     Boolean @default(false)
+  multicastFacebook  Boolean @default(false)
+  multicastInstagram Boolean @default(false)
+  multicastTiktok    Boolean @default(false)
 
   // Streaming preferences
-  useOBS          Boolean @default(true) // Whether to use OBS or browser streaming
+  useOBS Boolean @default(true) // Whether to use OBS or browser streaming
 
   // Metadata
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  products      StreamProduct[]
-  events        StreamEvent[]
+  products StreamProduct[]
+  events   StreamEvent[]
+  clips    StreamClip[]
 
   @@index([shop])
 }
 
 model StreamProduct {
-  id           String   @id @default(uuid())
-  streamId     String
-  productId    String   // Shopify product ID
-  variantId    String?  // Optional (future-proof)
-  position     Int      // Order in stream
-  featuredAt   DateTime?
+  id         String    @id @default(uuid())
+  streamId   String
+  productId  String // Shopify product ID
+  variantId  String? // Optional (future-proof)
+  position   Int // Order in stream
+  featuredAt DateTime?
 
-  stream       Stream   @relation(fields: [streamId], references: [id], onDelete: Cascade)
+  stream Stream @relation(fields: [streamId], references: [id], onDelete: Cascade)
 
   @@index([streamId])
 }
 
 model StreamEvent {
-  id         String   @id @default(uuid())
-  streamId   String
-  type       StreamEventType
-  payload    Json?
-  createdAt  DateTime @default(now())
+  id        String          @id @default(uuid())
+  streamId  String
+  type      StreamEventType
+  payload   Json?
+  createdAt DateTime        @default(now())
 
-  stream     Stream   @relation(fields: [streamId], references: [id], onDelete: Cascade)
+  stream Stream @relation(fields: [streamId], references: [id], onDelete: Cascade)
 
   @@index([streamId])
+}
+
+model StreamClip {
+  id        String  @id @default(uuid())
+  streamId  String
+  productId String? // Linked product (if auto-clip)
+
+  // Mux clip info
+  muxClipId         String?
+  muxClipPlaybackId String?
+
+  // Clip timing (seconds from stream start)
+  startTime Int
+  endTime   Int
+
+  // Shopify storage (after migration)
+  shopifyVideoId      String?
+  shopifyVideoUrl     String?
+  migratedToShopifyAt DateTime?
+
+  // Metadata
+  title       String?
+  description String?
+  createdAt   DateTime @default(now())
+
+  stream Stream @relation(fields: [streamId], references: [id], onDelete: Cascade)
+
+  @@index([streamId])
+  @@index([productId])
 }
