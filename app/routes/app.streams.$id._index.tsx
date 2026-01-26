@@ -9,7 +9,7 @@ import { mux } from "../lib/mux.server";
 import { ProductPickerButton, ProductLineup, type ProductDetail } from "../components/ProductLineup";
 import { ThumbnailUpload } from "../components/ThumbnailUpload";
 import { uploadFileToShopify } from "../lib/shopify-upload.server";
-import { getClipPlaybackUrl } from "../lib/video-playback.server";
+import { getClipPlaybackUrl } from "../lib/video-playback";
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const { shop, admin } = await requireShopSession(request);

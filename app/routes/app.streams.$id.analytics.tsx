@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 import { Page, Layout, Card, Text, Button, TextField, Banner, BlockStack, InlineStack } from "@shopify/polaris";
 import { requireShopSession } from "../auth.server";
 import db from "../db.server";
-import { getClipPlaybackUrl } from "../lib/video-playback.server";
+import { getClipPlaybackUrl } from "../lib/video-playback";
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const { shop } = await requireShopSession(request);
