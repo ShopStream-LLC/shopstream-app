@@ -1,5 +1,5 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
-import { useLoaderData, useNavigate, useActionData, Form, redirect, useNavigation } from "react-router";
+import { useLoaderData, useNavigate, useActionData, Form, redirect, useNavigation, useRevalidator } from "react-router";
 import { useState, useEffect, useRef } from "react";
 import {
   Page,
@@ -129,6 +129,34 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     }
   }
 
+  // REAL CHECKS: Verify OBS is streaming and Mux is active
+  const checks = {
+    obsStreaming: false,    // Is OBS actually streaming? (Redis state)
+    muxActive: false,       // Has Mux webhook fired? (Mux stream status)
+    playbackReady: false,   // Does playback ID exist?
+  };
+
+  // Check Redis for OBS streaming state
+  try {
+    const { redis } = await import("../lib/redis.server");
+    const redisState = await redis.get(`stream:${streamId}:state`);
+    checks.obsStreaming = redisState === "live";
+  } catch (error) {
+    console.error("Error checking Redis state:", error);
+  }
+
+  // Check Mux stream status
+  if (stream.muxStreamId && muxStream) {
+    try {
+      checks.muxActive = (muxStream as any).status === "active";
+      checks.playbackReady = !!stream.muxPlaybackId;
+    } catch (error) {
+      console.error("Error checking Mux status:", error);
+    }
+  }
+
+  const allChecksPassed = checks.obsStreaming && checks.muxActive && checks.playbackReady;
+
   // Fetch product details from Shopify
   const productDetails = await Promise.all(
     stream.products.map(async (streamProduct) => {
@@ -167,7 +195,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     })
   );
 
-  return { stream, muxStream, productDetails };
+  return { stream, muxStream, productDetails, checks, allChecksPassed };
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
@@ -189,19 +217,39 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   if (actionType === "startStreaming") {
-    console.log(`[Preflight] Starting stream ${streamId} - setting status to LIVE`);
+    // Verify stream is ready (safety check)
+    if (stream.status === "LIVE") {
+      return { error: "Stream is already live" };
+    }
+
+    // Check if OBS is actually streaming (verify readiness)
+    let isReady = false;
+    try {
+      const { redis } = await import("../lib/redis.server");
+      const redisState = await redis.get(`stream:${streamId}:state`);
+      isReady = redisState === "live" && !!stream.muxPlaybackId;
+    } catch (error) {
+      console.error("Error checking stream readiness:", error);
+    }
+
+    if (!isReady) {
+      return { 
+        error: "Stream is not ready. Please ensure OBS is streaming and all checks pass." 
+      };
+    }
+
+    console.log(`[Preflight] Going live - stream ${streamId} status set to LIVE`);
     
-    // Update stream status to LIVE and set liveStartedAt
+    // THIS is when stream actually goes live for customers
     await db.stream.update({
       where: { id: streamId },
       data: {
         status: "LIVE",
-        liveStartedAt: new Date(),
-        startedAt: new Date(),
+        startedAt: new Date(), // Actual "go live" moment
       },
     });
 
-    // Insert STREAM_STARTED event
+    // Insert STREAM_STARTED event (only created when merchant clicks button)
     await db.streamEvent.create({
       data: {
         streamId,
@@ -210,7 +258,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       },
     });
 
-    console.log(`[Preflight] Stream ${streamId} status updated to LIVE, returning success for navigation`);
+    console.log(`[Preflight] Stream ${streamId} is now LIVE, returning success for navigation`);
     
     // Return success for client-side navigation (preserves session in embedded app)
     return { success: true, streamId };
@@ -226,30 +274,26 @@ function formatDate(date: Date | string | null) {
 }
 
 export default function PreFlightCheckPage() {
-  const { stream, muxStream, productDetails } = useLoaderData<typeof loader>();
+  const loaderData = useLoaderData<typeof loader>();
+  const { stream, muxStream, productDetails, checks = { obsStreaming: false, muxActive: false, playbackReady: false }, allChecksPassed = false } = loaderData;
   const navigate = useNavigate();
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
+  const revalidator = useRevalidator();
   const hasNavigated = useRef(false);
 
-  const [checkProgress, setCheckProgress] = useState(0);
-  const [checksComplete, setChecksComplete] = useState(false);
   const [showAdvancedSettings, setShowAdvancedSettings] = useState(false);
-  const [useOBS, setUseOBS] = useState(true); // Default to OBS, disabled for now
 
-  // Auto checks simulation
+  // Auto-poll to detect when OBS starts streaming (every 5 seconds)
   useEffect(() => {
-    let progress = 0;
+    if (allChecksPassed) return; // Stop polling when ready
+    
     const interval = setInterval(() => {
-      progress += 20;
-      setCheckProgress(progress);
-      if (progress >= 100) {
-        clearInterval(interval);
-        setTimeout(() => setChecksComplete(true), 300);
-      }
-    }, 500);
+      revalidator.revalidate(); // Re-check every 5 seconds
+    }, 5000);
+    
     return () => clearInterval(interval);
-  }, []);
+  }, [allChecksPassed, revalidator]);
 
   // Handle client-side navigation after successful stream start
   useEffect(() => {
@@ -284,7 +328,8 @@ export default function PreFlightCheckPage() {
       ]}
       primaryAction={{
         content: "Start Streaming",
-        disabled: !checksComplete,
+        disabled: !allChecksPassed || navigation.state !== "idle",
+        loading: navigation.state === "submitting",
         onAction: () => {
           const form = document.querySelector('form[method="post"]') as HTMLFormElement;
           if (form) {
@@ -311,29 +356,62 @@ export default function PreFlightCheckPage() {
               {/* System Status Card */}
               <Card>
                 <BlockStack gap="400">
-                  {!checksComplete ? (
-                    <>
-                      <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-                        <div style={{ animation: "rotate 2s linear infinite" }}>
-                          <svg width="24" height="24" viewBox="0 0 20 20" fill="none">
-                            <path
-                              d="M10 2V6M10 14V18M18 10H14M6 10H2M15.5 4.5L12.5 7.5M7.5 12.5L4.5 15.5M15.5 15.5L12.5 12.5M7.5 7.5L4.5 4.5"
-                              stroke="#2C6ECB"
-                              strokeWidth="2"
-                              strokeLinecap="round"
-                            />
-                          </svg>
-                        </div>
-                        <Text variant="headingMd" as="h2">
-                          Running System Checks...
-                        </Text>
-                      </div>
-                      <ProgressBar progress={checkProgress} size="small" />
-                      <Text variant="bodySm" tone="subdued" as="p">
-                        {checkProgress}% complete
+                  <Text variant="headingMd" as="h2">
+                    System Checks
+                  </Text>
+                  
+                  {/* OBS Streaming Check */}
+                  <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                    {checks.obsStreaming ? (
+                      <Icon source={CheckIcon} tone="success" />
+                    ) : (
+                      <div style={{ animation: "pulse 2s infinite", color: "#6d7175" }}>⟳</div>
+                    )}
+                    <div style={{ flex: 1 }}>
+                      <Text variant="bodyMd" fontWeight="semibold" as="p">
+                        OBS Streaming
                       </Text>
-                    </>
-                  ) : (
+                      <Text variant="bodySm" tone="subdued" as="p">
+                        {checks.obsStreaming ? "Connected and streaming" : "Waiting for OBS to start streaming..."}
+                      </Text>
+                    </div>
+                  </div>
+
+                  {/* Mux Active Check */}
+                  <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                    {checks.muxActive ? (
+                      <Icon source={CheckIcon} tone="success" />
+                    ) : (
+                      <div style={{ animation: "pulse 2s infinite", color: "#6d7175" }}>⟳</div>
+                    )}
+                    <div style={{ flex: 1 }}>
+                      <Text variant="bodyMd" fontWeight="semibold" as="p">
+                        Mux Processing
+                      </Text>
+                      <Text variant="bodySm" tone="subdued" as="p">
+                        {checks.muxActive ? "Active and processing stream" : "Waiting for Mux to process..."}
+                      </Text>
+                    </div>
+                  </div>
+
+                  {/* Playback Ready Check */}
+                  <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                    {checks.playbackReady ? (
+                      <Icon source={CheckIcon} tone="success" />
+                    ) : (
+                      <div style={{ animation: "pulse 2s infinite", color: "#6d7175" }}>⟳</div>
+                    )}
+                    <div style={{ flex: 1 }}>
+                      <Text variant="bodyMd" fontWeight="semibold" as="p">
+                        Playback Ready
+                      </Text>
+                      <Text variant="bodySm" tone="subdued" as="p">
+                        {checks.playbackReady ? "Stream is ready for viewers" : "Waiting for playback ID..."}
+                      </Text>
+                    </div>
+                  </div>
+
+                  {allChecksPassed ? (
                     <div
                       style={{
                         padding: "16px",
@@ -361,11 +439,18 @@ export default function PreFlightCheckPage() {
                             Ready to Go Live!
                           </Text>
                           <Text variant="bodySm" as="p">
-                            All systems are working properly
+                            All systems are working properly. Click "Start Streaming" to go live.
                           </Text>
                         </div>
                       </div>
                     </div>
+                  ) : (
+                    <Banner tone="info">
+                      <Text as="p">
+                        Start streaming from OBS first. Once OBS is connected and Mux is processing,
+                        the "Start Streaming" button will be enabled.
+                      </Text>
+                    </Banner>
                   )}
 
                   {/* OBS Toggle (disabled for now) */}
@@ -388,64 +473,6 @@ export default function PreFlightCheckPage() {
                 </BlockStack>
               </Card>
 
-              {/* Component Status Row */}
-              <Card>
-                <InlineStack gap="400" blockAlign="center">
-                  <div style={{ flex: 1, textAlign: "center" }}>
-                    <div style={{ marginBottom: "8px" }}>
-                      {checksComplete ? (
-                        <div style={{ color: "#008060" }}>
-                          <Icon source={CheckIcon} />
-                        </div>
-                      ) : (
-                        <div style={{ animation: "pulse 2s infinite" }}>⟳</div>
-                      )}
-                    </div>
-                    <Text variant="bodyMd" fontWeight="semibold" as="p">
-                      Camera
-                    </Text>
-                    <Text variant="bodySm" tone="subdued" as="p">
-                      {checksComplete ? "Active" : "Checking..."}
-                    </Text>
-                  </div>
-
-                  <div style={{ flex: 1, textAlign: "center" }}>
-                    <div style={{ marginBottom: "8px" }}>
-                      {checksComplete ? (
-                        <div style={{ color: "#008060" }}>
-                          <Icon source={CheckIcon} />
-                        </div>
-                      ) : (
-                        <div style={{ animation: "pulse 2s infinite" }}>⟳</div>
-                      )}
-                    </div>
-                    <Text variant="bodyMd" fontWeight="semibold" as="p">
-                      Microphone
-                    </Text>
-                    <Text variant="bodySm" tone="subdued" as="p">
-                      {checksComplete ? "Active" : "Checking..."}
-                    </Text>
-                  </div>
-
-                  <div style={{ flex: 1, textAlign: "center" }}>
-                    <div style={{ marginBottom: "8px" }}>
-                      {checksComplete ? (
-                        <div style={{ color: "#008060" }}>
-                          <Icon source={CheckIcon} />
-                        </div>
-                      ) : (
-                        <div style={{ animation: "pulse 2s infinite" }}>⟳</div>
-                      )}
-                    </div>
-                    <Text variant="bodyMd" fontWeight="semibold" as="p">
-                      Connection
-                    </Text>
-                    <Text variant="bodySm" tone="subdued" as="p">
-                      {checksComplete ? "45 Mbps" : "Testing..."}
-                    </Text>
-                  </div>
-                </InlineStack>
-              </Card>
 
               {/* Camera Preview Card */}
               <Card>
@@ -598,7 +625,7 @@ export default function PreFlightCheckPage() {
                             borderRadius: "8px",
                           }}
                         >
-                          <Badge tone="info">#{index + 1}</Badge>
+                          <Badge tone="info">{`#${index + 1}`}</Badge>
                           {item.product ? (
                             <div style={{ display: "flex", alignItems: "center", gap: "8px", flex: 1 }}>
                               {item.product.featuredImage?.url && (
