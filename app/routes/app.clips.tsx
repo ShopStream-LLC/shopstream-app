@@ -3,7 +3,7 @@ import { useLoaderData, useNavigate } from "react-router";
 import { Page, Layout, Card, Text, EmptyState, BlockStack, InlineStack, Badge } from "@shopify/polaris";
 import { requireShopSession } from "../auth.server";
 import db from "../db.server";
-import { getClipPlaybackUrl } from "../lib/video-playback.server";
+import { getClipPlaybackUrl } from "../lib/video-playback";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { shop } = await requireShopSession(request);
