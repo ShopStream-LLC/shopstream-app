@@ -158,9 +158,9 @@ export default function LiveStreamingControl() {
 
   // Timer
   useEffect(() => {
-    if (!stream.liveStartedAt) return;
+    if (!stream.startedAt) return;
 
-    const startTime = new Date(stream.liveStartedAt).getTime();
+    const startTime = new Date(stream.startedAt).getTime();
 
     const interval = setInterval(() => {
       const now = Date.now();
@@ -169,7 +169,7 @@ export default function LiveStreamingControl() {
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [stream.liveStartedAt]);
+  }, [stream.startedAt]);
 
   // Enhanced HLS.js setup with LL-HLS for low latency
   useEffect(() => {

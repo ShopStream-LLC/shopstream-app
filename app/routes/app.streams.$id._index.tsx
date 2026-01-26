@@ -513,12 +513,11 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     }
 
     if (actionType === "startStream") {
-      // Update stream status to LIVE and set liveStartedAt
+      // Update stream status to LIVE
       await db.stream.update({
         where: { id: streamId },
         data: {
           status: "LIVE",
-          liveStartedAt: new Date(),
           startedAt: new Date(),
         },
       });

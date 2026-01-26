@@ -51,7 +51,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
     // Handle different event types
     if (eventType === "video.live_stream.active") {
-      // Stream started - find stream by muxStreamId
+      // OBS is streaming and Mux is processing - mark as ready (but NOT live yet)
+      // Stream only goes LIVE when merchant clicks "Start Streaming" button
       const liveStreamId = eventData.id;
       const liveStreamData = eventData as any;
       const stream = await db.stream.findFirst({
@@ -65,40 +66,28 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
       // Extract playback ID if available and not already set
       const playbackId = liveStreamData.playback_ids?.[0]?.id;
-      const updateData: any = {
-        status: "LIVE",
-        startedAt: new Date(),
-      };
+      const updateData: any = {};
       
       if (playbackId && !stream.muxPlaybackId) {
         updateData.muxPlaybackId = playbackId;
         console.log(`Mux webhook: Captured playback ID ${playbackId} from active event`);
       }
 
-      // Stream started
+      // Mark stream as ready (OBS streaming, Mux active) but DON'T set status to LIVE
+      // Status stays DRAFT/SCHEDULED until merchant clicks "Start Streaming"
       await Promise.all([
-        // Update Redis state
+        // Update Redis state (OBS is streaming)
         redis.set(`stream:${stream.id}:state`, "live"),
-        // Create StreamEvent
-        db.streamEvent.create({
-          data: {
-            streamId: stream.id,
-            type: "STREAM_STARTED",
-            payload: {
-              muxStreamId: liveStreamId,
-              timestamp: new Date().toISOString(),
-              playbackId: playbackId || null,
-            },
-          },
-        }),
-        // Update stream status (and possibly playback ID)
-        db.stream.update({
-          where: { id: stream.id },
-          data: updateData,
-        }),
+        // Update playback ID if available (but NOT status)
+        Object.keys(updateData).length > 0
+          ? db.stream.update({
+              where: { id: stream.id },
+              data: updateData,
+            })
+          : Promise.resolve(),
       ]);
 
-      console.log(`Mux webhook: Stream ${stream.id} went live (playbackId: ${playbackId || stream.muxPlaybackId || 'not yet available'})`);
+      console.log(`Mux webhook: Stream ${stream.id} is ready (OBS streaming, Mux active). Waiting for merchant to click "Start Streaming".`);
     } else if (eventType === "video.live_stream.idle") {
       // Stream ended - find stream by muxStreamId
       const liveStreamId = eventData.id;

@@ -83,9 +83,6 @@ model Stream {
   // Streaming preferences
   useOBS          Boolean @default(true) // Whether to use OBS or browser streaming
 
-  // Live stream state
-  liveStartedAt   DateTime? // When streaming actually started (for timer)
-
   // Metadata
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
